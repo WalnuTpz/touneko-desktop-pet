@@ -38,10 +38,11 @@ let firstLayout = true;
 let pendingBottomRight = true;
 let manifest = null;
 let fullscreenProcess = null;
+let fullscreenRestartTimer = null;
 let fullscreenOutput = "";
-let activeFullscreenDisplayId = null;
+let activeFullscreenDisplayIds = new Set();
 let fullscreenSamples = 0;
-const fullscreenStability = new StableValueTracker(null);
+const fullscreenStability = new StableValueTracker("");
 
 function generatedPath(...parts) {
   return path.join(__dirname, "..", "assets", "generated", ...parts);
@@ -210,6 +211,7 @@ function setPaused(value) {
 
 function setClickThrough(value) {
   runtime.clickThrough = Boolean(value);
+  if (runtime.clickThrough) dragState = null;
   runtime.pointerOverPet = false;
   sendCommand("set-click-through", { value: runtime.clickThrough });
   updateMouseIgnoring();
@@ -226,6 +228,7 @@ function setScale(value) {
 
 function hideByUser() {
   if (!petWindow || runtime.userHidden) return;
+  dragState = null;
   runtime.userHidden = true;
   runtime.pointerOverPet = false;
   sendCommand("user-hide");
@@ -326,14 +329,15 @@ function createTray() {
 }
 
 function updateFullscreenVisibility() {
-  const shouldHide =
-    activeFullscreenDisplayId !== null &&
-    String(activeFullscreenDisplayId) === String(runtime.currentDisplayId);
+  const shouldHide = activeFullscreenDisplayIds.has(
+    String(runtime.currentDisplayId),
+  );
   if (shouldHide === runtime.fullscreenHidden) return;
 
   runtime.fullscreenHidden = shouldHide;
   runtime.pointerOverPet = false;
   if (shouldHide) {
+    dragState = null;
     sendCommand("fullscreen-pause");
     petWindow?.hide();
   } else {
@@ -347,28 +351,41 @@ function parseFullscreenLine(line) {
   try {
     const fullscreenState = JSON.parse(line);
     fullscreenSamples += 1;
-    let candidateDisplayId = null;
-    if (
-      fullscreenState.fullscreen &&
-      fullscreenState.eligible !== false &&
-      Number(fullscreenState.processId) !== process.pid
-    ) {
-      const center = {
-        x: Math.round(
-          (Number(fullscreenState.left) + Number(fullscreenState.right)) / 2,
-        ),
-        y: Math.round(
-          (Number(fullscreenState.top) + Number(fullscreenState.bottom)) / 2,
-        ),
-      };
-      candidateDisplayId = screen.getDisplayNearestPoint(center).id;
+    if (fullscreenState.eligible === false) {
+      return;
     }
+    const fullscreenWindows = Array.isArray(fullscreenState.fullscreenWindows)
+      ? fullscreenState.fullscreenWindows
+      : fullscreenState.fullscreen
+        ? [fullscreenState]
+        : [];
+    const candidateDisplayIds = new Set();
+    for (const windowState of fullscreenWindows) {
+      if (Number(windowState.processId) === process.pid) continue;
+      const coordinates = [
+        Number(windowState.left),
+        Number(windowState.top),
+        Number(windowState.right),
+        Number(windowState.bottom),
+      ];
+      if (!coordinates.every(Number.isFinite)) continue;
+      const center = {
+        x: Math.round((coordinates[0] + coordinates[2]) / 2),
+        y: Math.round((coordinates[1] + coordinates[3]) / 2),
+      };
+      candidateDisplayIds.add(
+        String(screen.getDisplayNearestPoint(center).id),
+      );
+    }
+    const candidateKey = [...candidateDisplayIds].sort().join(",");
     const stable = fullscreenStability.sample(
-      candidateDisplayId,
-      candidateDisplayId === null ? 2 : 3,
+      candidateKey,
+      candidateKey === "" ? 2 : 3,
     );
     if (stable.changed) {
-      activeFullscreenDisplayId = stable.value;
+      activeFullscreenDisplayIds = new Set(
+        stable.value ? String(stable.value).split(",") : [],
+      );
       updateFullscreenVisibility();
     }
   } catch {
@@ -389,11 +406,14 @@ function fullscreenMonitorPath() {
 }
 
 function startFullscreenMonitor() {
-  if (process.platform !== "win32") return;
+  if (process.platform !== "win32" || fullscreenProcess || quitting) return;
+  clearTimeout(fullscreenRestartTimer);
+  fullscreenRestartTimer = null;
   const monitorPath = fullscreenMonitorPath();
   if (!fs.existsSync(monitorPath)) return;
 
-  fullscreenProcess = spawn(
+  fullscreenOutput = "";
+  const child = spawn(
     "powershell.exe",
     [
       "-NoProfile",
@@ -412,31 +432,40 @@ function startFullscreenMonitor() {
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  fullscreenProcess.stdout.setEncoding("utf8");
-  fullscreenProcess.stdout.on("data", (chunk) => {
+  fullscreenProcess = child;
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk) => {
     fullscreenOutput += chunk;
     const lines = fullscreenOutput.split(/\r?\n/);
     fullscreenOutput = lines.pop() || "";
     lines.forEach(parseFullscreenLine);
   });
-  fullscreenProcess.stderr.setEncoding("utf8");
-  fullscreenProcess.stderr.on("data", (chunk) => {
+  child.stderr.setEncoding("utf8");
+  child.stderr.on("data", (chunk) => {
     if (app.commandLine.hasSwitch("smoke-test")) {
       console.error("全屏监测：", chunk.trim());
     }
   });
-  fullscreenProcess.on("exit", () => {
+  const handleMonitorStop = () => {
+    if (fullscreenProcess !== child) return;
     fullscreenProcess = null;
-    fullscreenStability.reset(null);
-    activeFullscreenDisplayId = null;
-    if (!quitting) updateFullscreenVisibility();
-  });
+    fullscreenStability.reset("");
+    activeFullscreenDisplayIds = new Set();
+    if (quitting) return;
+    updateFullscreenVisibility();
+    fullscreenRestartTimer = setTimeout(startFullscreenMonitor, 1500);
+  };
+  child.once("error", handleMonitorStop);
+  child.once("exit", handleMonitorStop);
 }
 
 function stopFullscreenMonitor() {
+  clearTimeout(fullscreenRestartTimer);
+  fullscreenRestartTimer = null;
   if (!fullscreenProcess) return;
-  fullscreenProcess.kill();
+  const child = fullscreenProcess;
   fullscreenProcess = null;
+  child.kill();
 }
 
 function moveBy(delta) {
