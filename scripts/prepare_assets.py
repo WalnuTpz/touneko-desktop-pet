@@ -291,7 +291,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
 
     overrides = load_overrides()
     builder = AssetBuilder(output_root, overrides)
-    daily_pairs, daily_asset_ids = build_daily_pairs(builder)
+    daily_pairs, _daily_asset_ids = build_daily_pairs(builder)
     interaction_asset_ids = {
         builder.register(path) for path in image_files(INTERACTION_ROOT)
     }
