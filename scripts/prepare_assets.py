@@ -354,6 +354,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
             "staticDurationMs": {"min": 2_000, "max": 4_000},
             "gifDurationMs": {"min": 3_000, "max": 6_000},
             "movementDurationMs": {"min": 3_000, "max": 8_000},
+            "openingBubbleDurationMs": 3_500,
             "automaticActionProbability": 0.66,
             "automaticMovementProbability": 0.34,
             "movementAxisProbability": {"horizontal": 0.5, "vertical": 0.5},
