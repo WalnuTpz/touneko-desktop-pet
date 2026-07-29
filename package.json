@@ -18,6 +18,7 @@
     "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/renderer.js",
     "check:assets": "python scripts/prepare_assets.py --check",
     "test": "npm run prepare:assets && node tests/core.test.js && node tests/manifest.test.js",
+    "catalog:assets": "python scripts/render_asset_catalog.py",
     "icon": "python scripts/make_icon.py",
     "pack": "electron-builder --dir",
     "predist": "npm run prepare:assets",
