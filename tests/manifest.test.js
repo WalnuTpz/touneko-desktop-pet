@@ -79,4 +79,20 @@ for (const representation of manifest.icons.trayRepresentations) {
   assert.equal(height / representation.scaleFactor, 16);
 }
 
+function assetBySource(source) {
+  return Object.values(manifest.assets).find((asset) =>
+    asset.sources.includes(source),
+  );
+}
+
+const workIdle = assetBySource("assets/local/日常与悬停/3_工作2.png");
+const workQuestion = assetBySource("assets/local/日常与悬停/4_工作3.png");
+assert.ok(workIdle && workQuestion);
+assert.ok(
+  Math.abs(workIdle.displayScale - workQuestion.displayScale) /
+    workIdle.displayScale <
+    0.05,
+  "带高处问号的工作悬停图应按猫主体而非总高度匹配日常图",
+);
+
 console.log("manifest.test.js 通过");

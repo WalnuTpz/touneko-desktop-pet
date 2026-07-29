@@ -624,7 +624,14 @@ async function rendererSmokeState() {
     `({
       mode: document.querySelector("#pet-stage")?.dataset.mode,
       scale: Number(document.querySelector("#pet-stage")?.dataset.scale),
-      assetId: document.querySelector("#pet-image")?.dataset.assetId
+      assetId: document.querySelector("#pet-image")?.dataset.assetId,
+      dailyCycle: Number(document.querySelector("#pet-stage")?.dataset.dailyCycle),
+      behaviorTrigger: document.querySelector("#pet-stage")?.dataset.behaviorTrigger,
+      bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
+      dailyRemainingMs:
+        typeof state !== "undefined" && state?.dailyTimer
+          ? state.dailyTimer.remaining()
+          : 0
     })`,
     true,
   );
@@ -653,13 +660,35 @@ async function runSmokeTest() {
     throw new Error(`悬停恢复状态无效：${JSON.stringify(leaveHoverState)}`);
   }
   await captureSmokePage("01-daily.png");
-  sendCommand("random-action", { interrupt: true });
-  await delay(350);
+  const cycleBeforeManualAction = leaveHoverState.dailyCycle;
+  await petWindow.webContents.executeJavaScript(
+    `startAction(manifest.staticActions[0], "smoke-manual")`,
+    true,
+  );
+  await delay(300);
   const actionState = await rendererSmokeState();
-  if (!String(actionState.mode).startsWith("action-")) {
+  if (
+    actionState.mode !== "action-static" ||
+    actionState.behaviorTrigger !== "smoke-manual" ||
+    !actionState.bubbleVisible
+  ) {
     throw new Error(`随机动作状态无效：${JSON.stringify(actionState)}`);
   }
   await captureSmokePage("02-action.png");
+  await delay(manifest.rules.staticDurationMs.max + 250);
+  const dailyAfterManualAction = await rendererSmokeState();
+  if (
+    dailyAfterManualAction.mode !== "daily" ||
+    dailyAfterManualAction.dailyCycle <= cycleBeforeManualAction ||
+    dailyAfterManualAction.dailyRemainingMs <
+      manifest.rules.dailyDelayMs.min - 1000 ||
+    dailyAfterManualAction.dailyRemainingMs >
+      manifest.rules.dailyDelayMs.max
+  ) {
+    throw new Error(
+      `手动动作结束后没有重置日常倒计时：${JSON.stringify(dailyAfterManualAction)}`,
+    );
+  }
   const positionBeforeMovement = petWindow.getPosition();
   sendCommand("random-movement", { interrupt: true });
   await delay(550);
