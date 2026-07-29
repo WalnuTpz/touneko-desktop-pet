@@ -813,9 +813,13 @@ function pauseForFullscreen() {
   state.hoverLeaveTimer.pause();
   state.bubbleTimer.pause();
   state.gifPlayer.pause();
-  if (state.movement?.raf !== null) {
-    cancelAnimationFrame(state.movement.raf);
-    state.movement.raf = null;
+  if (state.movement) {
+    state.movement.token += 1;
+    if (state.movement.raf !== null) {
+      cancelAnimationFrame(state.movement.raf);
+      state.movement.raf = null;
+    }
+    state.movement.lastTimestamp = null;
   }
   reportPointerRegion(false);
 }

@@ -848,8 +848,16 @@ async function runSmokeTest() {
     throw new Error(`随机动作状态无效：${JSON.stringify(actionState)}`);
   }
   await captureSmokePage("02-action.png");
-  await delay(manifest.rules.staticDurationMs.max + 250);
-  const dailyAfterManualAction = await rendererSmokeState();
+  const actionDeadline =
+    Date.now() + manifest.rules.staticDurationMs.max + 1000;
+  let dailyAfterManualAction = await rendererSmokeState();
+  while (
+    dailyAfterManualAction.mode === "action-static" &&
+    Date.now() < actionDeadline
+  ) {
+    await delay(50);
+    dailyAfterManualAction = await rendererSmokeState();
+  }
   if (
     !["daily", "hover"].includes(dailyAfterManualAction.mode) ||
     dailyAfterManualAction.dailyCycle <= cycleBeforeManualAction ||
@@ -885,6 +893,16 @@ async function runSmokeTest() {
     throw new Error("随机移动没有改变窗口位置");
   }
   sendCommand("fullscreen-pause");
+  const pauseDeadline = Date.now() + 1000;
+  while (
+    !(await petWindow.webContents.executeJavaScript(
+      `Boolean(state?.fullscreenPaused)`,
+      true,
+    )) &&
+    Date.now() < pauseDeadline
+  ) {
+    await delay(20);
+  }
   const positionBeforeFullscreenPause = petWindow.getPosition();
   await delay(220);
   const positionDuringFullscreenPause = petWindow.getPosition();
@@ -895,6 +913,16 @@ async function runSmokeTest() {
     throw new Error("全屏暂停期间窗口仍在移动");
   }
   sendCommand("fullscreen-resume");
+  const resumeDeadline = Date.now() + 1000;
+  while (
+    (await petWindow.webContents.executeJavaScript(
+      `Boolean(state?.fullscreenPaused)`,
+      true,
+    )) &&
+    Date.now() < resumeDeadline
+  ) {
+    await delay(20);
+  }
   await delay(260);
   const positionAfterFullscreenResume = petWindow.getPosition();
   if (
