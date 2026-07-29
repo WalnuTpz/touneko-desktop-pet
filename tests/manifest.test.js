@@ -12,8 +12,8 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
 assert.equal(manifest.schemaVersion, 2);
 assert.equal(manifest.daily.length, 5);
-assert.equal(manifest.actions.length, 112);
-assert.equal(manifest.staticActions.length, 97);
+assert.equal(manifest.actions.length, 111);
+assert.equal(manifest.staticActions.length, 96);
 assert.equal(manifest.gifActions.length, 15);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
@@ -21,6 +21,20 @@ assert.deepEqual(manifest.rules.staticDurationMs, { min: 2_000, max: 4_000 });
 assert.deepEqual(manifest.rules.gifDurationMs, { min: 3_000, max: 6_000 });
 assert.deepEqual(manifest.rules.movementDurationMs, { min: 3_000, max: 8_000 });
 assert.equal(manifest.rules.baseDisplayScale, 0.8);
+assert.equal(manifest.assets[manifest.dragAsset]?.kind, "static");
+assert.ok(!manifest.actions.includes(manifest.dragAsset));
+assert.ok(
+  manifest.assets[manifest.dragAsset].sources.includes(
+    "assets/local/日常与悬停/倒立.png",
+  ),
+  "拖拽素材应来自日常与悬停/倒立.png",
+);
+assert.ok(
+  manifest.assets[manifest.dragAsset].sources.includes(
+    "assets/local/糖猫合集/倒立.png",
+  ),
+  "同内容的倒立素材应复用一个生成副本",
+);
 
 const windowWidth = Number(mainSource.match(/const WINDOW_WIDTH = (\d+);/)?.[1]);
 const windowHeight = Number(mainSource.match(/const WINDOW_HEIGHT = (\d+);/)?.[1]);

@@ -49,6 +49,10 @@ def asset_order(manifest: dict) -> list[tuple[str, str]]:
             if asset_id not in seen:
                 ordered.append((asset_id, "悬停"))
                 seen.add(asset_id)
+    drag_asset_id = manifest.get("dragAsset")
+    if drag_asset_id and drag_asset_id not in seen:
+        ordered.append((drag_asset_id, "拖拽"))
+        seen.add(drag_asset_id)
     movement_ids = {
         entry["asset"]: name for name, entry in manifest["movement"].items()
     }

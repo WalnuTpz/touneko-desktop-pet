@@ -657,6 +657,9 @@ async function rendererSmokeState() {
       dailyCycle: Number(document.querySelector("#pet-stage")?.dataset.dailyCycle),
       behaviorTrigger: document.querySelector("#pet-stage")?.dataset.behaviorTrigger,
       bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
+      dragging:
+        typeof state !== "undefined" &&
+        state?.mode === "dragging",
       dailyRemainingMs:
         typeof state !== "undefined" && state?.dailyTimer
           ? state.dailyTimer.remaining()
@@ -759,6 +762,47 @@ async function runSmokeTest() {
   const dailyState = await rendererSmokeState();
   if (dailyState.mode !== "daily" || !dailyState.assetId) {
     throw new Error(`初始日常状态无效：${JSON.stringify(dailyState)}`);
+  }
+  const dragState = await petWindow.webContents.executeJavaScript(
+    `(async () => {
+      const before = {
+        mode: state.mode,
+        assetId: state.currentAssetId,
+        remainingMs: state.dailyTimer.remaining()
+      };
+      beginDragVisual();
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      const during = {
+        mode: state.mode,
+        assetId: state.currentAssetId,
+        remainingMs: state.dailyTimer.remaining()
+      };
+      endDragVisual();
+      await new Promise((resolve) => setTimeout(resolve, 60));
+      return {
+        before,
+        during,
+        after: {
+          mode: state.mode,
+          assetId: state.currentAssetId,
+          remainingMs: state.dailyTimer.remaining()
+        },
+        expectedDragAsset: manifest.dragAsset
+      };
+    })`,
+    true,
+  );
+  if (
+    dragState.during.mode !== "dragging" ||
+    dragState.during.assetId !== dragState.expectedDragAsset ||
+    dragState.after.mode !== dragState.before.mode ||
+    dragState.after.assetId !== dragState.before.assetId ||
+    Math.abs(
+      dragState.during.remainingMs - dragState.before.remainingMs,
+    ) > 80 ||
+    dragState.after.remainingMs >= dragState.during.remainingMs
+  ) {
+    throw new Error(`拖拽表情或状态恢复无效：${JSON.stringify(dragState)}`);
   }
   petWindow.webContents.sendInputEvent({
     type: "mouseMove",
