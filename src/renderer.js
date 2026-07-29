@@ -1,144 +1,661 @@
 const stage = document.querySelector("#pet-stage");
 const petImage = document.querySelector("#pet-image");
-const speechBubble = document.querySelector("#speech-bubble");
+const {
+  PausableTimer,
+  chooseGifLoopCount,
+  pickUniform,
+  pickWithRecent,
+  pushRecent,
+  randomBetween,
+} = window.PetCore;
 
-const ASSET_ROOT = new URL("../assets/local/糖猫合集/", window.location.href);
-const DEFAULT_ACTION = { file: "站.png", duration: 0 };
+const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
+const DOUBLE_CLICK_DELAY_MS = 280;
+const DRAG_THRESHOLD = 5;
+const BASELINE_MARGIN = 18;
 
-const ACTIONS = [
-  { file: "动图/得意.gif", duration: 3200, words: ["今天也很得意！", "看我干嘛～"] },
-  { file: "动图/敬礼.gif", duration: 2600, words: ["收到！", "保证完成任务！"] },
-  { file: "动图/跳跳.gif", duration: 2600, words: ["芜湖！", "跳一下～"] },
-  { file: "动图/戴耳机.gif", duration: 4300, words: ["正在听歌♪", "这首好听！"] },
-  { file: "动图/智慧.gif", duration: 3600, words: ["让我想想……", "智慧的眼神。"] },
-  { file: "动图/看不懂.gif", duration: 3000, words: ["看不懂喵。", "这是什么？"] },
-  { file: "动图/哇.gif", duration: 2500, words: ["哇！", "真的假的？"] },
-  { file: "动图/吐.gif", duration: 3300, words: ["呕——", "不可以吃这个！"] },
-  { file: "坐.png", duration: 4200, words: ["坐一会儿。"] },
-  { file: "趴1.png", duration: 4200, words: ["歇会儿～"] },
-  { file: "看书.png", duration: 4500, words: ["学习时间。"] },
-  { file: "睡.png", duration: 4800, words: ["呼……", "晚安喵。"] },
-];
-
-const PET_ACTIONS = [
-  { file: "动图/伸手.gif", duration: 3000, words: ["再摸一下！", "贴贴～"] },
-  { file: "舒服.png", duration: 3000, words: ["好舒服呀。"] },
-  { file: "爱你.png", duration: 3000, words: ["爱你喵！"] },
-];
-
-let currentActionTimer = null;
-let randomActionTimer = null;
-let bubbleTimer = null;
-let walkTimer = null;
-let autoWander = true;
-let walking = false;
-let facing = -1;
+let manifest = null;
+let assets = null;
+let windowSize = { width: 760, height: 760 };
+let state = null;
 let pointerState = null;
 let suppressClickUntil = 0;
 let clickTimer = null;
+let lastPointerRegion = null;
+let imageLoaded = false;
+let readyReported = false;
 
-function randomItem(items) {
-  return items[Math.floor(Math.random() * items.length)];
-}
-
-function randomBetween(min, max) {
-  return Math.round(min + Math.random() * (max - min));
-}
+const hitCanvas = document.createElement("canvas");
+const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
 
 function assetUrl(relativePath) {
-  const url = new URL(relativePath, ASSET_ROOT);
-  url.searchParams.set("play", String(Date.now()));
-  return url.href;
+  return new URL(relativePath, GENERATED_ROOT).href;
 }
 
-function showBubble(message, duration = 1900) {
-  if (!message) return;
-  clearTimeout(bubbleTimer);
-  speechBubble.textContent = message;
-  speechBubble.classList.add("visible");
-  bubbleTimer = setTimeout(() => speechBubble.classList.remove("visible"), duration);
+function currentAsset() {
+  return state?.currentAssetId ? assets[state.currentAssetId] : null;
 }
 
-function setFacing(direction) {
-  facing = direction >= 0 ? 1 : -1;
-  petImage.style.setProperty("--facing", String(facing));
+function currentFrame() {
+  const asset = currentAsset();
+  return asset?.frames[state.currentFrameIndex] || null;
 }
 
-function showAction(action, returnToIdle = true) {
-  stopWalking();
-  clearTimeout(currentActionTimer);
-  petImage.src = assetUrl(action.file);
+function reportPointerRegion(overPet) {
+  const next = Boolean(overPet) && !state?.clickThrough;
+  if (lastPointerRegion === next) return;
+  lastPointerRegion = next;
+  window.desktopPet.setPointerRegion(next);
+}
 
-  if (action.words?.length) {
-    showBubble(randomItem(action.words), Math.min(action.duration || 2000, 2200));
+function setFacing(value) {
+  state.facing = value < 0 ? -1 : 1;
+  petImage.style.setProperty("--facing", String(state.facing));
+  updateGeometry();
+}
+
+function toggleFacing() {
+  setFacing(-state.facing);
+}
+
+function geometryFor(asset, frame) {
+  const scale = asset.displayScale * state.userScale;
+  const imageWidth = asset.canvas.width * scale;
+  const imageHeight = asset.canvas.height * scale;
+  const imageLeft = (windowSize.width - imageWidth) / 2;
+  const imageTop = windowSize.height - BASELINE_MARGIN - imageHeight;
+  const sourceBounds = frame.bounds;
+  const sourceX =
+    state.facing > 0
+      ? sourceBounds.x
+      : asset.canvas.width - sourceBounds.x - sourceBounds.width;
+  const padding = Number(asset.collisionPadding) || 0;
+  return {
+    scale,
+    imageWidth,
+    imageHeight,
+    imageLeft,
+    imageTop,
+    collision: {
+      x: imageLeft + sourceX * scale - padding,
+      y: imageTop + sourceBounds.y * scale - padding,
+      width: sourceBounds.width * scale + padding * 2,
+      height: sourceBounds.height * scale + padding * 2,
+    },
+  };
+}
+
+function drawHitCanvas() {
+  const asset = currentAsset();
+  if (!asset || !imageLoaded || !petImage.naturalWidth) return;
+  const geometry = geometryFor(asset, currentFrame());
+  const width = Math.max(1, Math.ceil(geometry.imageWidth));
+  const height = Math.max(1, Math.ceil(geometry.imageHeight));
+  if (hitCanvas.width !== width) hitCanvas.width = width;
+  if (hitCanvas.height !== height) hitCanvas.height = height;
+  hitContext.clearRect(0, 0, width, height);
+  hitContext.drawImage(petImage, 0, 0, width, height);
+}
+
+function updateGeometry() {
+  const asset = currentAsset();
+  const frame = currentFrame();
+  if (!asset || !frame) return;
+  const geometry = geometryFor(asset, frame);
+  petImage.style.left = `${geometry.imageLeft}px`;
+  petImage.style.top = `${geometry.imageTop}px`;
+  petImage.style.width = `${geometry.imageWidth}px`;
+  petImage.style.height = `${geometry.imageHeight}px`;
+  window.desktopPet.updateLayout(geometry.collision);
+  drawHitCanvas();
+}
+
+function renderFrame(assetId, frameIndex = 0) {
+  const asset = assets[assetId];
+  if (!asset) {
+    throw new Error(`未知素材：${assetId}`);
+  }
+  const normalizedIndex = Math.min(
+    asset.frames.length - 1,
+    Math.max(0, Number(frameIndex) || 0),
+  );
+  const frame = asset.frames[normalizedIndex];
+  const nextSource = assetUrl(frame.file);
+  state.currentAssetId = assetId;
+  state.currentFrameIndex = normalizedIndex;
+  imageLoaded = petImage.src === nextSource && petImage.complete;
+  if (petImage.src !== nextSource) {
+    petImage.src = nextSource;
+  }
+  updateGeometry();
+}
+
+petImage.addEventListener("load", () => {
+  imageLoaded = true;
+  drawHitCanvas();
+  updateGeometry();
+  if (!readyReported) {
+    readyReported = true;
+    window.desktopPet.reportReady();
+  }
+});
+
+petImage.addEventListener("error", () => {
+  imageLoaded = false;
+  console.error("桌宠素材载入失败：", petImage.src);
+});
+
+function hitTest(clientX, clientY, tolerance = 0) {
+  const asset = currentAsset();
+  const frame = currentFrame();
+  if (!asset || !frame || !imageLoaded || !hitCanvas.width || !hitCanvas.height) {
+    return false;
+  }
+  const geometry = geometryFor(asset, frame);
+  let x = clientX - geometry.imageLeft;
+  const y = clientY - geometry.imageTop;
+  if (state.facing < 0) {
+    x = geometry.imageWidth - x;
+  }
+  if (
+    x < -tolerance ||
+    y < -tolerance ||
+    x >= geometry.imageWidth + tolerance ||
+    y >= geometry.imageHeight + tolerance
+  ) {
+    return false;
   }
 
-  if (returnToIdle && action.duration) {
-    currentActionTimer = setTimeout(showIdle, action.duration);
+  const centerX = Math.round(x);
+  const centerY = Math.round(y);
+  const radius = Math.max(0, Math.round(tolerance));
+  const startX = Math.max(0, centerX - radius);
+  const startY = Math.max(0, centerY - radius);
+  const endX = Math.min(hitCanvas.width - 1, centerX + radius);
+  const endY = Math.min(hitCanvas.height - 1, centerY + radius);
+  if (endX < startX || endY < startY) return false;
+  const pixels = hitContext.getImageData(
+    startX,
+    startY,
+    endX - startX + 1,
+    endY - startY + 1,
+  ).data;
+  const threshold = Number(manifest.rules.alphaThreshold) || 8;
+  for (let index = 3; index < pixels.length; index += 4) {
+    if (pixels[index] >= threshold) return true;
+  }
+  return false;
+}
+
+class GifPlayer {
+  constructor() {
+    this.assetId = null;
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.targetLoops = 1;
+    this.remainingMs = 0;
+    this.startedAt = 0;
+    this.timeout = null;
+    this.paused = false;
+    this.onComplete = null;
+    this.token = 0;
+  }
+
+  start(assetId, targetLoops, onComplete) {
+    this.stop();
+    this.assetId = assetId;
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.targetLoops = Math.max(1, targetLoops);
+    this.onComplete = onComplete;
+    this.token += 1;
+    renderFrame(assetId, 0);
+    this.remainingMs = assets[assetId].frames[0].durationMs;
+    this.#arm(this.token);
+  }
+
+  #arm(token) {
+    this.paused = false;
+    this.startedAt = performance.now();
+    this.timeout = setTimeout(() => this.#advance(token), this.remainingMs);
+  }
+
+  #advance(token) {
+    if (token !== this.token || !this.assetId) return;
+    this.timeout = null;
+    const asset = assets[this.assetId];
+    this.frameIndex += 1;
+    if (this.frameIndex >= asset.frames.length) {
+      this.frameIndex = 0;
+      this.completedLoops += 1;
+      if (this.completedLoops >= this.targetLoops) {
+        const callback = this.onComplete;
+        this.stop();
+        callback?.();
+        return;
+      }
+    }
+    renderFrame(this.assetId, this.frameIndex);
+    this.remainingMs = asset.frames[this.frameIndex].durationMs;
+    this.#arm(token);
+  }
+
+  pause() {
+    if (!this.assetId || this.paused || this.timeout === null) return;
+    clearTimeout(this.timeout);
+    this.timeout = null;
+    this.remainingMs = Math.max(
+      0,
+      this.remainingMs - (performance.now() - this.startedAt),
+    );
+    this.paused = true;
+  }
+
+  resume() {
+    if (!this.assetId || !this.paused) return;
+    this.#arm(this.token);
+  }
+
+  stop() {
+    if (this.timeout !== null) clearTimeout(this.timeout);
+    this.timeout = null;
+    this.assetId = null;
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.remainingMs = 0;
+    this.paused = false;
+    this.onComplete = null;
+    this.token += 1;
+  }
+
+  isActive() {
+    return Boolean(this.assetId);
   }
 }
 
-function showIdle() {
-  clearTimeout(currentActionTimer);
-  petImage.src = assetUrl(DEFAULT_ACTION.file);
-  scheduleRandomAction();
+function cancelMovement() {
+  if (!state.movement) return;
+  state.movement.token += 1;
+  if (state.movement.raf !== null) {
+    cancelAnimationFrame(state.movement.raf);
+  }
+  state.movement = null;
 }
 
-function scheduleRandomAction() {
-  clearTimeout(randomActionTimer);
-  randomActionTimer = setTimeout(() => {
-    if (autoWander && Math.random() < 0.28) {
-      startWalking(randomBetween(2200, 4800));
-    } else {
-      showAction(randomItem(ACTIONS));
+function stopCurrent({ clearPending = false } = {}) {
+  state.dailyTimer.cancel();
+  state.actionTimer.cancel();
+  state.hoverLeaveTimer.cancel();
+  state.gifPlayer.stop();
+  cancelMovement();
+  if (clearPending) state.pendingClick = null;
+}
+
+function rememberAsset(assetId) {
+  state.recent = pushRecent(
+    state.recent,
+    assetId,
+    manifest.rules.recentLimit,
+  );
+}
+
+function pickAction(trigger) {
+  const pool =
+    trigger === "double-click" ? manifest.gifActions : manifest.actions;
+  const weight = (assetId) => {
+    if (trigger !== "single-click") return 1;
+    return assets[assetId].kind === "static" ? 2 : 1;
+  };
+  return pickWithRecent(
+    pool,
+    state.recent,
+    weight,
+    Math.random,
+    manifest.rules.recentLimit,
+  );
+}
+
+function enterDaily() {
+  stopCurrent();
+  state.mode = "daily";
+  state.currentDaily = pickUniform(manifest.daily);
+  state.currentHoverId = null;
+  renderFrame(state.currentDaily.idle, 0);
+  const delay = randomBetween(
+    manifest.rules.dailyDelayMs.min,
+    manifest.rules.dailyDelayMs.max,
+  );
+  state.dailyTimer.start(delay);
+  if (state.manualPaused || state.fullscreenPaused) {
+    state.dailyTimer.pause();
+  }
+}
+
+function enterHover() {
+  if (state.mode !== "daily" || !state.currentDaily) return;
+  state.dailyTimer.pause();
+  state.hoverLeaveTimer.cancel();
+  state.mode = "hover";
+  state.currentHoverId = pickUniform(state.currentDaily.hovers);
+  renderFrame(state.currentHoverId, 0);
+}
+
+function leaveHover() {
+  if (state.mode !== "hover" || !state.currentDaily) return;
+  state.hoverLeaveTimer.cancel();
+  state.mode = "daily";
+  state.currentHoverId = null;
+  renderFrame(state.currentDaily.idle, 0);
+  if (!state.manualPaused && !state.fullscreenPaused) {
+    state.dailyTimer.resume();
+  }
+}
+
+function finishAction() {
+  const pending = state.pendingClick;
+  state.pendingClick = null;
+  if (pending) {
+    executeClickIntent(pending);
+  } else {
+    enterDaily();
+  }
+}
+
+function startAction(assetId) {
+  if (!assetId) {
+    enterDaily();
+    return;
+  }
+  stopCurrent();
+  rememberAsset(assetId);
+  const asset = assets[assetId];
+  if (asset.kind === "gif") {
+    state.mode = "action-gif";
+    const loops = chooseGifLoopCount(asset.loopDurationMs);
+    state.gifPlayer.start(assetId, loops, finishAction);
+    if (state.fullscreenPaused) state.gifPlayer.pause();
+  } else {
+    state.mode = "action-static";
+    renderFrame(assetId, 0);
+    state.actionTimer.start(
+      randomBetween(
+        manifest.rules.staticDurationMs.min,
+        manifest.rules.staticDurationMs.max,
+      ),
+    );
+    if (state.fullscreenPaused) state.actionTimer.pause();
+  }
+}
+
+function executeClickIntent(kind) {
+  const assetId = pickAction(kind === "double" ? "double-click" : "single-click");
+  startAction(assetId);
+}
+
+function queueOrExecuteClick(kind) {
+  if (state.mode === "hidden" || state.fullscreenPaused) return;
+  if (state.mode === "action-gif" && state.gifPlayer.isActive()) {
+    if (kind === "double" || state.pendingClick !== "double") {
+      state.pendingClick = kind;
     }
-  }, randomBetween(6500, 12500));
+    return;
+  }
+  executeClickIntent(kind);
 }
 
-function stopWalking() {
-  if (walkTimer) clearInterval(walkTimer);
-  walkTimer = null;
-  walking = false;
+function movementEntries() {
+  return Object.entries(manifest.movement).map(([name, entry]) => ({
+    name,
+    ...entry,
+  }));
 }
 
-function startWalking(duration = 4200) {
-  if (walking) return;
-  clearTimeout(currentActionTimer);
-  clearTimeout(randomActionTimer);
-  walking = true;
-  setFacing(Math.random() < 0.5 ? -1 : 1);
-  petImage.src = assetUrl("跑.png");
+function scheduleMovementFrame(movement) {
+  movement.raf = requestAnimationFrame((timestamp) =>
+    advanceMovement(movement, timestamp),
+  );
+}
 
-  const startedAt = Date.now();
-  let moving = false;
-  walkTimer = setInterval(async () => {
-    if (moving) return;
-    if (Date.now() - startedAt >= duration) {
-      stopWalking();
-      showIdle();
-      return;
+async function advanceMovement(movement, timestamp) {
+  if (state.movement !== movement || movement.token !== state.movement.token) return;
+  movement.raf = null;
+  if (state.fullscreenPaused) return;
+  if (movement.lastTimestamp === null) {
+    movement.lastTimestamp = timestamp;
+    scheduleMovementFrame(movement);
+    return;
+  }
+  const elapsed = Math.min(100, Math.max(0, timestamp - movement.lastTimestamp));
+  movement.lastTimestamp = timestamp;
+  movement.remainingMs -= elapsed;
+  if (movement.remainingMs <= 0) {
+    cancelMovement();
+    enterDaily();
+    return;
+  }
+
+  const distance = (movement.speed * elapsed) / 1000;
+  const delta =
+    movement.axis === "horizontal"
+      ? { x: movement.direction * distance, y: 0 }
+      : { x: 0, y: movement.direction * distance };
+  const token = movement.token;
+  const result = await window.desktopPet.moveBy(delta);
+  if (
+    !state.movement ||
+    state.movement !== movement ||
+    state.movement.token !== token
+  ) {
+    return;
+  }
+  if (movement.axis === "horizontal" && result.hitX) {
+    movement.direction *= -1;
+    toggleFacing();
+  } else if (movement.axis === "vertical" && result.hitY) {
+    movement.direction *= -1;
+  }
+  scheduleMovementFrame(movement);
+}
+
+function startRandomMovement() {
+  const candidates = movementEntries();
+  const allowedIds = pickWithRecent(
+    candidates.map((entry) => entry.asset),
+    state.recent,
+    () => 1,
+    Math.random,
+    manifest.rules.recentLimit,
+  );
+  const selected =
+    candidates.find((entry) => entry.asset === allowedIds) ||
+    pickUniform(candidates);
+  if (!selected) {
+    enterDaily();
+    return;
+  }
+
+  stopCurrent();
+  rememberAsset(selected.asset);
+  state.mode = "movement";
+  renderFrame(selected.asset, 0);
+  const movement = {
+    name: selected.name,
+    assetId: selected.asset,
+    speed: selected.speed,
+    axis: Math.random() < 0.5 ? "horizontal" : "vertical",
+    direction: Math.random() < 0.5 ? -1 : 1,
+    remainingMs: randomBetween(
+      manifest.rules.movementDurationMs.min,
+      manifest.rules.movementDurationMs.max,
+    ),
+    lastTimestamp: null,
+    raf: null,
+    token: 1,
+  };
+  state.movement = movement;
+  if (!state.fullscreenPaused) {
+    scheduleMovementFrame(movement);
+  }
+}
+
+function automaticTrigger() {
+  if (state.manualPaused || state.fullscreenPaused || state.mode !== "daily") {
+    return;
+  }
+  if (Math.random() < manifest.rules.automaticActionProbability) {
+    startAction(pickAction("automatic"));
+  } else {
+    startRandomMovement();
+  }
+}
+
+function pauseForFullscreen() {
+  if (state.fullscreenPaused) return;
+  state.fullscreenPaused = true;
+  state.dailyTimer.pause();
+  state.actionTimer.pause();
+  state.hoverLeaveTimer.pause();
+  state.gifPlayer.pause();
+  if (state.movement?.raf !== null) {
+    cancelAnimationFrame(state.movement.raf);
+    state.movement.raf = null;
+  }
+  reportPointerRegion(false);
+}
+
+function resumeFromFullscreen() {
+  if (!state.fullscreenPaused) return;
+  state.fullscreenPaused = false;
+  if ((state.mode === "daily" || state.mode === "hover") && !state.manualPaused) {
+    state.dailyTimer.resume();
+  } else if (state.mode === "action-static") {
+    state.actionTimer.resume();
+  } else if (state.mode === "action-gif") {
+    state.gifPlayer.resume();
+  } else if (state.mode === "movement" && state.movement) {
+    state.movement.lastTimestamp = null;
+    scheduleMovementFrame(state.movement);
+  }
+  if (state.mode === "hover") {
+    state.hoverLeaveTimer.resume();
+  }
+}
+
+function setManualPaused(value) {
+  state.manualPaused = Boolean(value);
+  if (state.mode !== "daily" && state.mode !== "hover") return;
+  if (state.manualPaused) {
+    state.dailyTimer.pause();
+  } else if (!state.fullscreenPaused && state.mode === "daily") {
+    state.dailyTimer.resume();
+  }
+}
+
+function setUserScale(value) {
+  const scale = Number(value);
+  if (!manifest.rules.scaleOptions.includes(scale)) return;
+  state.userScale = scale;
+  updateGeometry();
+}
+
+function hideRuntime() {
+  stopCurrent({ clearPending: true });
+  state.mode = "hidden";
+  state.currentDaily = null;
+  state.currentHoverId = null;
+  reportPointerRegion(false);
+}
+
+function callBack(payload) {
+  stopCurrent({ clearPending: true });
+  state.recent = [];
+  state.facing = 1;
+  state.manualPaused = Boolean(payload.paused);
+  state.clickThrough = Boolean(payload.clickThrough);
+  state.userScale = Number(payload.scale) || 1;
+  petImage.style.setProperty("--facing", "1");
+  enterDaily();
+}
+
+function handleCommand(payload) {
+  const { command } = payload;
+  switch (command) {
+    case "random-action":
+      stopCurrent({ clearPending: true });
+      startAction(pickAction("menu"));
+      break;
+    case "random-movement":
+      stopCurrent({ clearPending: true });
+      startRandomMovement();
+      break;
+    case "set-paused":
+      setManualPaused(payload.value);
+      break;
+    case "set-click-through":
+      state.clickThrough = Boolean(payload.value);
+      if (state.clickThrough && state.mode === "hover") leaveHover();
+      reportPointerRegion(false);
+      break;
+    case "set-scale":
+      setUserScale(payload.value);
+      break;
+    case "user-hide":
+      hideRuntime();
+      break;
+    case "call-back":
+      callBack(payload);
+      break;
+    case "fullscreen-pause":
+      pauseForFullscreen();
+      break;
+    case "fullscreen-resume":
+      resumeFromFullscreen();
+      break;
+    default:
+      break;
+  }
+}
+
+function updatePointerFromMouse(event) {
+  if (!state || state.mode === "hidden" || state.clickThrough) {
+    reportPointerRegion(false);
+    return;
+  }
+  if (pointerState?.moved) {
+    reportPointerRegion(true);
+    return;
+  }
+  const tolerance =
+    state.mode === "daily" || state.mode === "hover"
+      ? manifest.rules.hoverTolerance
+      : 0;
+  const overPet = hitTest(event.clientX, event.clientY, tolerance);
+  reportPointerRegion(overPet);
+
+  if (state.mode === "daily" && overPet) {
+    enterHover();
+  } else if (state.mode === "hover") {
+    if (overPet) {
+      state.hoverLeaveTimer.cancel();
+    } else if (!state.hoverLeaveTimer.isActive()) {
+      state.hoverLeaveTimer.start(manifest.rules.hoverLeaveDelayMs);
+      if (state.fullscreenPaused) state.hoverLeaveTimer.pause();
     }
-
-    moving = true;
-    try {
-      const result = await window.desktopPet.moveBy({ x: facing * 6, y: 0 });
-      if (!result.movedX) setFacing(-facing);
-    } finally {
-      moving = false;
-    }
-  }, 48);
+  }
 }
 
-function playRandomAction() {
-  showAction(randomItem(ACTIONS));
-}
-
-function playPetReaction() {
-  showAction(randomItem(PET_ACTIONS));
-}
+window.addEventListener("mousemove", updatePointerFromMouse);
+window.addEventListener("mouseleave", () => {
+  if (!pointerState) reportPointerRegion(false);
+  if (state?.mode === "hover" && !state.hoverLeaveTimer.isActive()) {
+    state.hoverLeaveTimer.start(manifest.rules.hoverLeaveDelayMs);
+  }
+});
 
 stage.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0) return;
+  if (event.button !== 0 || state.clickThrough || !hitTest(event.clientX, event.clientY, 0)) {
+    return;
+  }
   pointerState = {
     id: event.pointerId,
     startX: event.screenX,
@@ -147,27 +664,37 @@ stage.addEventListener("pointerdown", (event) => {
   };
   stage.setPointerCapture(event.pointerId);
   stage.classList.add("dragging");
-  window.desktopPet.dragStart({ screenX: event.screenX, screenY: event.screenY });
+  window.desktopPet.dragStart({
+    screenX: event.screenX,
+    screenY: event.screenY,
+  });
 });
 
-stage.addEventListener("pointermove", (event) => {
+stage.addEventListener("pointermove", async (event) => {
   if (!pointerState || pointerState.id !== event.pointerId) return;
   const distance = Math.hypot(
     event.screenX - pointerState.startX,
     event.screenY - pointerState.startY,
   );
-  if (distance > 4) pointerState.moved = true;
-  if (pointerState.moved) {
-    window.desktopPet.dragMove({ screenX: event.screenX, screenY: event.screenY });
-  }
+  if (distance > DRAG_THRESHOLD) pointerState.moved = true;
+  if (!pointerState.moved) return;
+  const result = await window.desktopPet.dragMove({
+    screenX: event.screenX,
+    screenY: event.screenY,
+  });
+  if (result?.flipHorizontal) toggleFacing();
 });
 
 function finishPointer(event) {
   if (!pointerState || pointerState.id !== event.pointerId) return;
-  if (pointerState.moved) suppressClickUntil = Date.now() + 350;
+  if (pointerState.moved) {
+    suppressClickUntil = Date.now() + 400;
+  }
   pointerState = null;
   stage.classList.remove("dragging");
-  if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+  if (stage.hasPointerCapture(event.pointerId)) {
+    stage.releasePointerCapture(event.pointerId);
+  }
   window.desktopPet.dragEnd();
 }
 
@@ -177,46 +704,57 @@ stage.addEventListener("pointercancel", finishPointer);
 stage.addEventListener("click", () => {
   if (Date.now() < suppressClickUntil) return;
   clearTimeout(clickTimer);
-  clickTimer = setTimeout(playPetReaction, 230);
+  clickTimer = setTimeout(
+    () => queueOrExecuteClick("single"),
+    DOUBLE_CLICK_DELAY_MS,
+  );
 });
 
 stage.addEventListener("dblclick", () => {
   if (Date.now() < suppressClickUntil) return;
   clearTimeout(clickTimer);
-  showAction({
-    file: "动图/跳跳.gif",
-    duration: 3000,
-    words: ["嘿嘿！", "你又戳我～"],
-  });
+  clickTimer = null;
+  queueOrExecuteClick("double");
 });
 
 window.addEventListener("contextmenu", (event) => {
+  if (state.clickThrough || !hitTest(event.clientX, event.clientY, 0)) return;
   event.preventDefault();
   window.desktopPet.openMenu();
 });
 
-window.desktopPet.onCommand(({ command, value }) => {
-  switch (command) {
-    case "pet":
-      playPetReaction();
-      break;
-    case "random-action":
-      playRandomAction();
-      break;
-    case "walk":
-      startWalking(5200);
-      break;
-    case "set-auto-wander":
-      autoWander = Boolean(value);
-      scheduleRandomAction();
-      break;
-    default:
-      break;
-  }
-});
+async function initialize() {
+  const bootstrap = await window.desktopPet.getBootstrap();
+  manifest = bootstrap.manifest;
+  assets = manifest.assets;
+  windowSize = bootstrap.window;
+  state = {
+    mode: "starting",
+    currentAssetId: null,
+    currentFrameIndex: 0,
+    currentDaily: null,
+    currentHoverId: null,
+    facing: 1,
+    recent: [],
+    pendingClick: null,
+    manualPaused: Boolean(bootstrap.runtime.paused),
+    clickThrough: Boolean(bootstrap.runtime.clickThrough),
+    userScale: Number(bootstrap.runtime.scale) || 1,
+    fullscreenPaused: false,
+    movement: null,
+    dailyTimer: null,
+    actionTimer: null,
+    hoverLeaveTimer: null,
+    gifPlayer: new GifPlayer(),
+  };
+  state.dailyTimer = new PausableTimer(automaticTrigger);
+  state.actionTimer = new PausableTimer(finishAction);
+  state.hoverLeaveTimer = new PausableTimer(leaveHover);
+  window.desktopPet.onCommand(handleCommand);
+  setFacing(1);
+  enterDaily();
+}
 
-window.desktopPet.getSettings().then((savedSettings) => {
-  autoWander = savedSettings.autoWander !== false;
-  setFacing(-1);
-  showIdle();
+initialize().catch((error) => {
+  console.error("糖猫桌宠初始化失败：", error);
 });
