@@ -306,9 +306,13 @@ function createPetMenu({ includeActions }) {
 }
 
 function createTray() {
-  let icon = nativeImage.createFromPath(generatedPath("icon-source.png"));
-  if (!icon.isEmpty()) {
-    icon = icon.resize({ width: 24, height: 24 });
+  const icon = nativeImage.createEmpty();
+  for (const representation of manifest.icons.trayRepresentations) {
+    const buffer = fs.readFileSync(generatedPath(...representation.file.split("/")));
+    icon.addRepresentation({
+      scaleFactor: representation.scaleFactor,
+      buffer,
+    });
   }
   tray = new Tray(icon);
   tray.setToolTip("糖猫桌宠");

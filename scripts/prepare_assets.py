@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from PIL import Image, ImageSequence
+from PIL import Image, ImageFilter, ImageSequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -325,10 +325,9 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         raise FileNotFoundError(f"缺少图标素材：{stand_path}")
     stand_asset_id = builder.register(stand_path)
     stand_asset = builder.assets[stand_asset_id]
-    icon_source = output_root / "icon-source.png"
     if stand_asset["kind"] != "static":
         raise ValueError("站.png 必须是静态图片")
-    shutil.copy2(output_root / stand_asset["file"], icon_source)
+    icon_files = generate_icons(output_root, output_root / stand_asset["file"])
 
     return {
         "schemaVersion": 2,
@@ -352,6 +351,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "gifActions": gif_action_ids,
         "movement": movement,
         "iconAsset": stand_asset_id,
+        "icons": icon_files,
         "assets": builder.assets,
         "statistics": {
             "collectionFiles": len(collection_files),
@@ -362,6 +362,56 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
             "gifActions": len(gif_action_ids),
             "movementAssets": len(movement),
         },
+    }
+
+
+def square_icon(source: Image.Image, size: int) -> Image.Image:
+    rgba = source.convert("RGBA")
+    bounds = alpha_bounds(rgba)
+    cropped = rgba.crop(bounds)
+    margin = max(1, round(size * 0.075))
+    inner = max(1, size - margin * 2)
+    ratio = min(inner / cropped.width, inner / cropped.height)
+    resized = cropped.resize(
+        (
+            max(1, round(cropped.width * ratio)),
+            max(1, round(cropped.height * ratio)),
+        ),
+        Image.Resampling.LANCZOS,
+    )
+    if size <= 48:
+        resized = resized.filter(
+            ImageFilter.UnsharpMask(radius=0.45, percent=110, threshold=1)
+        )
+    canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    canvas.alpha_composite(
+        resized,
+        ((size - resized.width) // 2, (size - resized.height) // 2),
+    )
+    return canvas
+
+
+def generate_icons(output_root: Path, source_path: Path) -> dict[str, Any]:
+    with Image.open(source_path) as image:
+        source = image.convert("RGBA")
+    icon_root = output_root / "icons"
+    icon_root.mkdir(parents=True, exist_ok=True)
+    sizes = [16, 20, 24, 30, 32, 36, 40, 48, 64, 128, 256]
+    files: dict[str, str] = {}
+    for size in sizes:
+        relative = Path("icons") / f"tangmao-{size}.png"
+        square_icon(source, size).save(output_root / relative, format="PNG")
+        files[str(size)] = relative.as_posix()
+    shutil.copy2(output_root / files["256"], output_root / "icon-source.png")
+    return {
+        "sizes": files,
+        "appSource": "icon-source.png",
+        "trayRepresentations": [
+            {"scaleFactor": 1, "file": files["16"]},
+            {"scaleFactor": 1.25, "file": files["20"]},
+            {"scaleFactor": 1.5, "file": files["24"]},
+            {"scaleFactor": 2, "file": files["32"]},
+        ],
     }
 
 
