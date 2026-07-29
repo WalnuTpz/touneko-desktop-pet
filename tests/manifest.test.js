@@ -12,11 +12,14 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
 assert.equal(manifest.schemaVersion, 2);
 assert.equal(manifest.daily.length, 5);
-assert.equal(manifest.actions.length, 114);
-assert.equal(manifest.staticActions.length, 99);
+assert.equal(manifest.actions.length, 112);
+assert.equal(manifest.staticActions.length, 97);
 assert.equal(manifest.gifActions.length, 15);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
+assert.deepEqual(manifest.rules.staticDurationMs, { min: 2_000, max: 4_000 });
+assert.deepEqual(manifest.rules.gifDurationMs, { min: 3_000, max: 6_000 });
+assert.deepEqual(manifest.rules.movementDurationMs, { min: 3_000, max: 8_000 });
 assert.equal(manifest.rules.baseDisplayScale, 0.8);
 
 const windowWidth = Number(mainSource.match(/const WINDOW_WIDTH = (\d+);/)?.[1]);
@@ -86,6 +89,37 @@ function assetBySource(source) {
     asset.sources.includes(source),
   );
 }
+
+function dailyPairById(id) {
+  return manifest.daily.find((pair) => pair.id === id);
+}
+
+function pairSources(pair, field) {
+  const assetIds = field === "idle" ? [pair.idle] : pair.hovers;
+  return assetIds.flatMap((assetId) => manifest.assets[assetId].sources);
+}
+
+const standingPair = dailyPairById("daily-1");
+const sittingPair = dailyPairById("daily-9");
+assert.ok(standingPair && sittingPair);
+assert.ok(
+  pairSources(standingPair, "hovers").includes(
+    "assets/local/日常与悬停/2_防弹衣.png",
+  ),
+  "第 1 组悬停素材应包含 2_防弹衣.png",
+);
+assert.ok(
+  pairSources(sittingPair, "idle").includes(
+    "assets/local/日常与悬停/9_口瓜.png",
+  ),
+  "第 9 组日常素材应更新为 9_口瓜.png",
+);
+assert.ok(
+  pairSources(sittingPair, "hovers").includes(
+    "assets/local/日常与悬停/10_坐.png",
+  ),
+  "第 9 组悬停素材应包含 10_坐.png",
+);
 
 const workIdle = assetBySource("assets/local/日常与悬停/3_工作2.png");
 const workQuestion = assetBySource("assets/local/日常与悬停/4_工作3.png");

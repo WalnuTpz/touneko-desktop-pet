@@ -81,16 +81,26 @@
     return next.slice(-Math.max(0, recentLimit));
   }
 
-  function chooseGifLoopCount(loopDurationMs, random = Math.random) {
+  function chooseGifLoopCount(
+    loopDurationMs,
+    random = Math.random,
+    minimumDurationMs = 3000,
+    maximumDurationMs = 6000,
+  ) {
     const duration = Number(loopDurationMs);
     if (!Number.isFinite(duration) || duration <= 0) {
       return 1;
     }
-    if (duration > 4000) {
+    const minimumDuration = Math.max(0, Number(minimumDurationMs) || 0);
+    const maximumDuration = Math.max(
+      minimumDuration,
+      Number(maximumDurationMs) || minimumDuration,
+    );
+    if (duration > maximumDuration) {
       return 1;
     }
-    const minimum = Math.max(1, Math.ceil(2000 / duration));
-    const maximum = Math.max(1, Math.floor(4000 / duration));
+    const minimum = Math.max(1, Math.ceil(minimumDuration / duration));
+    const maximum = Math.max(1, Math.floor(maximumDuration / duration));
     if (minimum <= maximum) {
       return randomInteger(minimum, maximum, random);
     }

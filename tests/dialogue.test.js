@@ -3,10 +3,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACTION_DIALOGUE,
+  bubbleMessageForAction,
   dialogueForAsset,
   messagesForAsset,
   normalizeAssetName,
-  shouldShowActionBubble,
 } = require("../src/dialogue");
 
 const projectRoot = path.join(__dirname, "..");
@@ -25,8 +25,15 @@ assert.equal(
   dialogueForAsset("新增动作", () => 0.999),
   "这个表情，你懂的。",
 );
-assert.equal(shouldShowActionBubble(() => 0.499999), true);
-assert.equal(shouldShowActionBubble(() => 0.5), false);
+assert.equal(bubbleMessageForAction("爱你", () => 0), null);
+assert.equal(
+  bubbleMessageForAction("爱你", () => 1 / 3),
+  "最喜欢你啦！",
+);
+assert.equal(
+  bubbleMessageForAction("爱你", () => 2 / 3),
+  "给你比个心～",
+);
 
 for (const actionId of manifest.actions) {
   const asset = manifest.assets[actionId];
