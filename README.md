@@ -10,12 +10,16 @@
 
 ```text
 .
+├─ assets/
+│  ├─ README.md            素材目录说明
+│  ├─ local/               本地原始素材，不进入 Git
+│  │  ├─ 糖猫合集/
+│  │  └─ 日常与悬停/
+│  └─ generated/           处理后的素材副本，不进入 Git
 ├─ docs/                 第二版行为规则
 ├─ scripts/              构建与素材处理脚本
 ├─ src/                  Electron 应用源码
 ├─ tests/                检查与测试
-├─ 糖猫合集/             本地素材，不进入 Git
-├─ 日常与悬停/           本地配对素材，不进入 Git
 ├─ package.json
 └─ package-lock.json
 ```
@@ -53,4 +57,4 @@ npm run dist
 
 ## 素材说明
 
-原始素材只在本地使用。程序只读取原素材，所有尺寸归一化、图标生成和其他处理都针对副本，不修改原始图片。
+原始素材放在 `assets/local/`，只在本地使用。程序只读取原素材，所有尺寸归一化、图标生成和其他处理都写入 `assets/generated/` 等副本目录，不修改原始图片。

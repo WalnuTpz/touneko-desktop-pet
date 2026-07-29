@@ -220,7 +220,14 @@ function rebuildTrayMenu() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, "..", "糖猫合集", "站.png");
+  const iconPath = path.join(
+    __dirname,
+    "..",
+    "assets",
+    "local",
+    "糖猫合集",
+    "站.png",
+  );
   let icon = nativeImage.createFromPath(iconPath);
   if (!icon.isEmpty()) icon = icon.resize({ width: 24, height: 24 });
 
