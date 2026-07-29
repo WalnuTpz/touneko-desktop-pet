@@ -666,8 +666,96 @@ async function rendererSmokeState() {
   );
 }
 
+async function verifyHoverMaskRegression() {
+  return petWindow.webContents.executeJavaScript(
+    `(async () => {
+      const pair =
+        manifest.daily.find((entry) => entry.number === 7) ||
+        manifest.daily[0];
+      const waitForImage = () =>
+        petImage.complete && petImage.naturalWidth
+          ? Promise.resolve()
+          : new Promise((resolve) =>
+              petImage.addEventListener("load", resolve, { once: true })
+            );
+      let result = null;
+      state.fullscreenPaused = true;
+      try {
+        stopCurrent({ clearPending: true });
+        state.currentDaily = pair;
+        state.currentHoverId = null;
+        setMode("daily");
+        renderFrame(pair.idle, 0);
+        await waitForImage();
+        drawHitCanvas();
+        if (!captureHoverAnchor()) {
+          return { foundAnchorOnlyPoint: false, lift: 0 };
+        }
+        state.currentHoverId = pair.hovers[0];
+        setMode("hover");
+        renderFrame(state.currentHoverId, 0);
+        await waitForImage();
+        drawHitCanvas();
+
+        const idleAsset = assets[pair.idle];
+        const idleGeometry = geometryFor(idleAsset, idleAsset.frames[0]);
+        let point = null;
+        const left = Math.floor(idleGeometry.collision.x);
+        const top = Math.floor(idleGeometry.collision.y);
+        const right = Math.ceil(
+          idleGeometry.collision.x + idleGeometry.collision.width
+        );
+        const bottom = Math.ceil(
+          idleGeometry.collision.y + idleGeometry.collision.height
+        );
+        for (let y = top; y <= bottom && !point; y += 2) {
+          for (let x = left; x <= right; x += 2) {
+            if (
+              hitTestHoverAnchor(x, y, 0) &&
+              !hitTest(x, y, manifest.rules.hoverTolerance)
+            ) {
+              point = { x, y };
+              break;
+            }
+          }
+        }
+        const hoverGeometry = geometryFor(currentAsset(), currentFrame());
+        result = {
+          foundAnchorOnlyPoint: Boolean(point),
+          unionKeepsHover: Boolean(
+            point &&
+              (hitTest(point.x, point.y, manifest.rules.hoverTolerance) ||
+                hitTestHoverAnchor(
+                  point.x,
+                  point.y,
+                  manifest.rules.hoverTolerance
+                ))
+          ),
+          lift: hoverGeometry.imageTop - hoverGeometry.imageLayoutTop,
+        };
+      } finally {
+        state.fullscreenPaused = false;
+        enterDaily();
+      }
+      return result;
+    })()`,
+    true,
+  );
+}
+
 async function runSmokeTest() {
   await delay(300);
+  const hoverMaskRegression = await verifyHoverMaskRegression();
+  if (
+    !hoverMaskRegression?.foundAnchorOnlyPoint ||
+    !hoverMaskRegression.unionKeepsHover ||
+    hoverMaskRegression.lift !== -4
+  ) {
+    throw new Error(
+      `悬停联合遮罩或微动几何无效：${JSON.stringify(hoverMaskRegression)}`,
+    );
+  }
+  await delay(150);
   const dailyState = await rendererSmokeState();
   if (dailyState.mode !== "daily" || !dailyState.assetId) {
     throw new Error(`初始日常状态无效：${JSON.stringify(dailyState)}`);
@@ -718,6 +806,14 @@ async function runSmokeTest() {
       `手动动作结束后没有重置日常倒计时：${JSON.stringify(dailyAfterManualAction)}`,
     );
   }
+  await petWindow.webContents.executeJavaScript(
+    `clickTimer = setTimeout(
+      () => queueOrExecuteClick("single"),
+      DOUBLE_CLICK_DELAY_MS
+    )`,
+    true,
+  );
+  const cycleBeforeManualMovement = dailyAfterManualAction.dailyCycle;
   const positionBeforeMovement = petWindow.getPosition();
   sendCommand("random-movement", { interrupt: true });
   await delay(550);
@@ -752,6 +848,24 @@ async function runSmokeTest() {
     throw new Error("退出全屏暂停后移动没有恢复");
   }
   await captureSmokePage("03-movement.png");
+  await petWindow.webContents.executeJavaScript(
+    `if (state.movement) state.movement.remainingMs = 80`,
+    true,
+  );
+  await delay(300);
+  const dailyAfterManualMovement = await rendererSmokeState();
+  if (
+    dailyAfterManualMovement.mode !== "daily" ||
+    dailyAfterManualMovement.dailyCycle <= cycleBeforeManualMovement ||
+    dailyAfterManualMovement.dailyRemainingMs <
+      manifest.rules.dailyDelayMs.min - 1000 ||
+    dailyAfterManualMovement.dailyRemainingMs >
+      manifest.rules.dailyDelayMs.max
+  ) {
+    throw new Error(
+      `手动移动结束后没有重置日常倒计时：${JSON.stringify(dailyAfterManualMovement)}`,
+    );
+  }
   setScale(1.5);
   await delay(250);
   const scaleState = await rendererSmokeState();
