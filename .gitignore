@@ -14,3 +14,4 @@ out/
 # Local pet assets and generated copies are intentionally not published
 assets/local/
 assets/generated/
+assets/generated-staging/
