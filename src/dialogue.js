@@ -265,15 +265,19 @@
     return messages[index];
   }
 
-  function shouldShowActionBubble(random = Math.random) {
-    return random() < 0.5;
+  function bubbleMessageForAction(name, random = Math.random) {
+    const messages = messagesForAsset(name);
+    const roll = Math.max(0, Math.min(0.999999, random()));
+    if (roll < 1 / 3) return null;
+    if (roll < 2 / 3) return messages[0];
+    return messages[1];
   }
 
   return {
     ACTION_DIALOGUE,
+    bubbleMessageForAction,
     dialogueForAsset,
     messagesForAsset,
     normalizeAssetName,
-    shouldShowActionBubble,
   };
 });

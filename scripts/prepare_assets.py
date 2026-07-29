@@ -341,7 +341,8 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "rules": {
             "dailyDelayMs": {"min": 20_000, "max": 30_000},
             "staticDurationMs": {"min": 2_000, "max": 4_000},
-            "movementDurationMs": {"min": 3_000, "max": 6_000},
+            "gifDurationMs": {"min": 3_000, "max": 6_000},
+            "movementDurationMs": {"min": 3_000, "max": 8_000},
             "automaticActionProbability": 0.66,
             "automaticMovementProbability": 0.34,
             "movementAxisProbability": {"horizontal": 0.5, "vertical": 0.5},
@@ -468,10 +469,10 @@ def main() -> None:
     if args.check:
         expected = {
             "collectionFiles": 135,
-            "dailyFiles": 17,
+            "dailyFiles": 19,
             "dailyPairs": 5,
-            "actions": 114,
-            "staticActions": 99,
+            "actions": 112,
+            "staticActions": 97,
             "gifActions": 15,
             "movementAssets": 4,
         }

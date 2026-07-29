@@ -59,11 +59,12 @@ for (const id of ["a", "b", "c", "d", "e", "f"]) {
 }
 assert.deepEqual(recent, ["b", "c", "d", "e", "f"]);
 
+assert.equal(chooseGifLoopCount(7000, () => 0), 1);
 assert.equal(chooseGifLoopCount(5000, () => 0), 1);
 assert.equal(chooseGifLoopCount(3000, () => 0), 1);
-assert.equal(chooseGifLoopCount(1000, () => 0), 2);
-assert.equal(chooseGifLoopCount(1000, () => 0.999), 4);
-assert.equal(chooseGifLoopCount(540, sequenceRandom([0.5])), 6);
+assert.equal(chooseGifLoopCount(1000, () => 0), 3);
+assert.equal(chooseGifLoopCount(1000, () => 0.999), 6);
+assert.equal(chooseGifLoopCount(540, sequenceRandom([0.5])), 9);
 
 const stable = new StableValueTracker(null);
 assert.deepEqual(stable.sample("display-1", 3), {

@@ -10,8 +10,8 @@ const {
   randomBetween,
 } = window.PetCore;
 const {
+  bubbleMessageForAction,
   dialogueForAsset,
-  shouldShowActionBubble,
 } = window.PetDialogue;
 
 const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
@@ -463,8 +463,9 @@ function hideBubble(immediate = false) {
 }
 
 function showActionBubble(asset, actionDurationMs, force = false) {
-  if (!force && !shouldShowActionBubble()) return;
-  const message = dialogueForAsset(asset.name);
+  const message = force
+    ? dialogueForAsset(asset.name, () => 0)
+    : bubbleMessageForAction(asset.name);
   if (!message) return;
   clearTimeout(bubbleShapeReleaseTimer);
   bubbleShapeReleaseTimer = null;
@@ -582,7 +583,12 @@ function startAction(assetId, trigger = "automatic") {
   stage.dataset.behaviorTrigger = trigger;
   if (asset.kind === "gif") {
     setMode("action-gif");
-    const loops = chooseGifLoopCount(asset.loopDurationMs);
+    const loops = chooseGifLoopCount(
+      asset.loopDurationMs,
+      Math.random,
+      manifest.rules.gifDurationMs.min,
+      manifest.rules.gifDurationMs.max,
+    );
     state.gifPlayer.start(assetId, loops, finishAction);
     showActionBubble(
       asset,
