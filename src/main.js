@@ -390,7 +390,7 @@ function startFullscreenMonitor() {
     ],
     {
       windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"],
+      stdio: ["ignore", "pipe", "pipe"],
     },
   );
   fullscreenProcess.stdout.setEncoding("utf8");
@@ -399,6 +399,12 @@ function startFullscreenMonitor() {
     const lines = fullscreenOutput.split(/\r?\n/);
     fullscreenOutput = lines.pop() || "";
     lines.forEach(parseFullscreenLine);
+  });
+  fullscreenProcess.stderr.setEncoding("utf8");
+  fullscreenProcess.stderr.on("data", (chunk) => {
+    if (app.commandLine.hasSwitch("smoke-test")) {
+      console.error("全屏监测：", chunk.trim());
+    }
   });
   fullscreenProcess.on("exit", () => {
     fullscreenProcess = null;
@@ -636,8 +642,14 @@ async function runSmokeTest() {
     throw new Error(`缩放状态无效：${JSON.stringify(scaleState)}`);
   }
   await captureSmokePage("04-scale-150.png");
-  if (process.platform === "win32" && fullscreenSamples < 1) {
-    throw new Error("没有收到全屏监测进程的有效状态");
+  if (process.platform === "win32") {
+    const monitorDeadline = Date.now() + 3000;
+    while (fullscreenSamples < 1 && Date.now() < monitorDeadline) {
+      await delay(100);
+    }
+    if (fullscreenSamples < 1) {
+      throw new Error("没有收到全屏监测进程的有效状态");
+    }
   }
   console.log("第二版 Electron 冒烟测试通过");
   quitApplication();
