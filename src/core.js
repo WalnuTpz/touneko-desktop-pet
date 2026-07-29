@@ -161,8 +161,49 @@
     }
   }
 
+  class StableValueTracker {
+    constructor(initialValue = null) {
+      this.acceptedValue = initialValue;
+      this.candidateValue = initialValue;
+      this.candidateCount = 0;
+    }
+
+    sample(value, requiredSamples = 2) {
+      const required = Math.max(1, Math.floor(Number(requiredSamples) || 1));
+      if (Object.is(value, this.candidateValue)) {
+        this.candidateCount += 1;
+      } else {
+        this.candidateValue = value;
+        this.candidateCount = 1;
+      }
+      const changed =
+        this.candidateCount >= required &&
+        !Object.is(this.acceptedValue, this.candidateValue);
+      if (changed) {
+        this.acceptedValue = this.candidateValue;
+      }
+      return {
+        changed,
+        value: this.acceptedValue,
+        candidate: this.candidateValue,
+        count: this.candidateCount,
+      };
+    }
+
+    reset(value = null) {
+      this.acceptedValue = value;
+      this.candidateValue = value;
+      this.candidateCount = 0;
+    }
+
+    current() {
+      return this.acceptedValue;
+    }
+  }
+
   return {
     PausableTimer,
+    StableValueTracker,
     candidatesOutsideRecent,
     chooseGifLoopCount,
     pickUniform,

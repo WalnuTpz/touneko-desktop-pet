@@ -1,5 +1,6 @@
 const assert = require("node:assert/strict");
 const {
+  StableValueTracker,
   candidatesOutsideRecent,
   chooseGifLoopCount,
   pickWeighted,
@@ -63,5 +64,21 @@ assert.equal(chooseGifLoopCount(3000, () => 0), 1);
 assert.equal(chooseGifLoopCount(1000, () => 0), 2);
 assert.equal(chooseGifLoopCount(1000, () => 0.999), 4);
 assert.equal(chooseGifLoopCount(540, sequenceRandom([0.5])), 6);
+
+const stable = new StableValueTracker(null);
+assert.deepEqual(stable.sample("display-1", 3), {
+  changed: false,
+  value: null,
+  candidate: "display-1",
+  count: 1,
+});
+assert.equal(stable.sample("display-1", 3).changed, false);
+assert.equal(stable.sample("display-1", 3).changed, true);
+assert.equal(stable.current(), "display-1");
+assert.equal(stable.sample(null, 2).changed, false);
+assert.equal(stable.sample("display-1", 3).changed, false);
+assert.equal(stable.sample(null, 2).changed, false);
+assert.equal(stable.sample(null, 2).changed, true);
+assert.equal(stable.current(), null);
 
 console.log("core.test.js 通过");
