@@ -1,3 +1,27 @@
 {
-  "scaleMultipliers": {}
+  "scaleMultipliers": {
+    "assets/local/日常与悬停/3_工作2.png": 1.25,
+    "assets/local/日常与悬停/4_工作1.png": 1.25,
+    "assets/local/日常与悬停/4_工作3.png": 1.25,
+    "assets/local/日常与悬停/4_工作4.png": 1.25,
+    "assets/local/糖猫合集/伸长手.png": 1.55,
+    "assets/local/糖猫合集/促销.png": 1.25,
+    "assets/local/糖猫合集/写字.png": 1.25,
+    "assets/local/糖猫合集/功夫糖猫.png": 1.25,
+    "assets/local/糖猫合集/去世.png": 1.2,
+    "assets/local/糖猫合集/吊水.png": 1.45,
+    "assets/local/糖猫合集/拍卖.png": 1.25,
+    "assets/local/糖猫合集/摆摊.png": 1.25,
+    "assets/local/糖猫合集/晴天娃娃.png": 1.4,
+    "assets/local/糖猫合集/智慧.png": 1.25,
+    "assets/local/糖猫合集/翻倒.png": 0.68,
+    "assets/local/糖猫合集/趴1.png": 0.72,
+    "assets/local/糖猫合集/趴2.png": 0.82,
+    "assets/local/糖猫合集/趴3.png": 0.82,
+    "assets/local/糖猫合集/趴4.png": 0.75,
+    "assets/local/糖猫合集/骑士.png": 1.4,
+    "assets/local/糖猫合集/骑鳄鱼.png": 1.25,
+    "assets/local/糖猫合集/动图/伸手.gif": 1.25,
+    "assets/local/糖猫合集/动图/智慧.gif": 1.25
+  }
 }
