@@ -657,6 +657,7 @@ async function rendererSmokeState() {
       dailyCycle: Number(document.querySelector("#pet-stage")?.dataset.dailyCycle),
       behaviorTrigger: document.querySelector("#pet-stage")?.dataset.behaviorTrigger,
       bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
+      bubbleText: document.querySelector("#speech-bubble")?.textContent || "",
       dragging:
         typeof state !== "undefined" &&
         state?.mode === "dragging",
@@ -748,6 +749,15 @@ async function verifyHoverMaskRegression() {
 
 async function runSmokeTest() {
   await delay(300);
+  const startupState = await rendererSmokeState();
+  if (
+    startupState.mode !== "daily" ||
+    !startupState.bubbleVisible ||
+    startupState.bubbleText.length < 12 ||
+    startupState.bubbleText.length > 24
+  ) {
+    throw new Error(`启动开场白无效：${JSON.stringify(startupState)}`);
+  }
   const hoverMaskRegression = await verifyHoverMaskRegression();
   if (
     !hoverMaskRegression?.foundAnchorOnlyPoint ||
