@@ -33,6 +33,7 @@ ALPHA_THRESHOLD = 8
 TARGET_BODY_HEIGHT = 190
 KEEP_HEIGHT_MIN = 180
 KEEP_HEIGHT_MAX = 200
+GLOBAL_DISPLAY_SCALE = 0.8
 COLLISION_PADDING = 3
 MOVEMENT_FILES = {
     "跑": "跑.png",
@@ -140,7 +141,7 @@ def display_scale(
     multiplier = float(multipliers.get(relative_source(source_path), 1.0))
     if not math.isfinite(multiplier) or multiplier <= 0:
         raise ValueError(f"无效的素材缩放倍率：{relative_source(source_path)}")
-    return round(base_scale * multiplier, 8)
+    return round(base_scale * multiplier * GLOBAL_DISPLAY_SCALE, 8)
 
 
 def load_overrides() -> dict[str, Any]:
@@ -348,6 +349,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
             "hoverLeaveDelayMs": 120,
             "hoverTolerance": 4,
             "alphaThreshold": ALPHA_THRESHOLD,
+            "baseDisplayScale": GLOBAL_DISPLAY_SCALE,
             "scaleOptions": [0.75, 1, 1.25, 1.5],
         },
         "daily": daily_pairs,

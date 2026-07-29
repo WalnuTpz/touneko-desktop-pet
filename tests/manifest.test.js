@@ -17,6 +17,7 @@ assert.equal(manifest.staticActions.length, 99);
 assert.equal(manifest.gifActions.length, 15);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
+assert.equal(manifest.rules.baseDisplayScale, 0.8);
 
 const windowWidth = Number(mainSource.match(/const WINDOW_WIDTH = (\d+);/)?.[1]);
 const windowHeight = Number(mainSource.match(/const WINDOW_HEIGHT = (\d+);/)?.[1]);
