@@ -25,9 +25,9 @@ assert.equal(manifest.assets[manifest.dragAsset]?.kind, "static");
 assert.ok(!manifest.actions.includes(manifest.dragAsset));
 assert.ok(
   manifest.assets[manifest.dragAsset].sources.includes(
-    "assets/local/日常与悬停/倒立.png",
+    "assets/local/日常与悬停拖拽/倒立.png",
   ),
-  "拖拽素材应来自日常与悬停/倒立.png",
+  "拖拽素材应来自日常与悬停拖拽/倒立.png",
 );
 assert.ok(
   manifest.assets[manifest.dragAsset].sources.includes(
@@ -35,6 +35,18 @@ assert.ok(
   ),
   "同内容的倒立素材应复用一个生成副本",
 );
+for (const asset of Object.values(manifest.assets)) {
+  if (
+    asset.sources.some((source) =>
+      source.startsWith("assets/local/日常与悬停拖拽/"),
+    )
+  ) {
+    assert.ok(
+      !manifest.actions.includes(asset.id),
+      `专用目录素材不得进入普通动作池：${asset.name}`,
+    );
+  }
+}
 
 const windowWidth = Number(mainSource.match(/const WINDOW_WIDTH = (\d+);/)?.[1]);
 const windowHeight = Number(mainSource.match(/const WINDOW_HEIGHT = (\d+);/)?.[1]);
@@ -118,25 +130,25 @@ const sittingPair = dailyPairById("daily-9");
 assert.ok(standingPair && sittingPair);
 assert.ok(
   pairSources(standingPair, "hovers").includes(
-    "assets/local/日常与悬停/2_防弹衣.png",
+    "assets/local/日常与悬停拖拽/2_防弹衣.png",
   ),
   "第 1 组悬停素材应包含 2_防弹衣.png",
 );
 assert.ok(
   pairSources(sittingPair, "idle").includes(
-    "assets/local/日常与悬停/9_口瓜.png",
+    "assets/local/日常与悬停拖拽/9_口瓜.png",
   ),
   "第 9 组日常素材应更新为 9_口瓜.png",
 );
 assert.ok(
   pairSources(sittingPair, "hovers").includes(
-    "assets/local/日常与悬停/10_坐.png",
+    "assets/local/日常与悬停拖拽/10_坐.png",
   ),
   "第 9 组悬停素材应包含 10_坐.png",
 );
 
-const workIdle = assetBySource("assets/local/日常与悬停/3_工作2.png");
-const workQuestion = assetBySource("assets/local/日常与悬停/4_工作3.png");
+const workIdle = assetBySource("assets/local/日常与悬停拖拽/3_工作2.png");
+const workQuestion = assetBySource("assets/local/日常与悬停拖拽/4_工作3.png");
 assert.ok(workIdle && workQuestion);
 assert.ok(
   Math.abs(workIdle.displayScale - workQuestion.displayScale) /

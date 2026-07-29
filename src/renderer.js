@@ -434,8 +434,7 @@ function cancelMovement() {
 function bubbleOccupiesShape() {
   return (
     state?.mode !== "dragging" &&
-    speechBubble.classList.contains("visible") ||
-    (state?.mode !== "dragging" &&
+    (speechBubble.classList.contains("visible") ||
       speechBubble.classList.contains("fading"))
   );
 }
@@ -1028,6 +1027,13 @@ stage.addEventListener("pointermove", async (event) => {
     screenX: event.screenX,
     screenY: event.screenY,
   });
+  if (
+    !pointerState ||
+    pointerState.id !== event.pointerId ||
+    !pointerState.moved
+  ) {
+    return;
+  }
   if (result?.flipHorizontal) toggleFacing();
 });
 
@@ -1067,6 +1073,9 @@ function finishPointer(event) {
 
 stage.addEventListener("pointerup", finishPointer);
 stage.addEventListener("pointercancel", finishPointer);
+stage.addEventListener("lostpointercapture", (event) => {
+  if (pointerState?.id === event.pointerId) cancelPointerInteraction();
+});
 
 stage.addEventListener("click", () => {
   if (Date.now() < suppressClickUntil) return;
