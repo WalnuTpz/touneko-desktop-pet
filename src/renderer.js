@@ -16,7 +16,7 @@ const BASELINE_MARGIN = 18;
 
 let manifest = null;
 let assets = null;
-let windowSize = { width: 760, height: 760 };
+let windowSize = { width: 960, height: 900 };
 let state = null;
 let pointerState = null;
 let suppressClickUntil = 0;

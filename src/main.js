@@ -11,8 +11,8 @@ const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
-const WINDOW_WIDTH = 760;
-const WINDOW_HEIGHT = 760;
+const WINDOW_WIDTH = 960;
+const WINDOW_HEIGHT = 900;
 const EDGE_MARGIN_X = 14;
 const EDGE_MARGIN_Y = 10;
 const SCALE_OPTIONS = [0.75, 1, 1.25, 1.5];
