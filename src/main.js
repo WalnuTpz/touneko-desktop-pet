@@ -634,6 +634,25 @@ async function runSmokeTest() {
   ) {
     throw new Error("随机移动没有改变窗口位置");
   }
+  sendCommand("fullscreen-pause");
+  const positionBeforeFullscreenPause = petWindow.getPosition();
+  await delay(220);
+  const positionDuringFullscreenPause = petWindow.getPosition();
+  if (
+    positionBeforeFullscreenPause[0] !== positionDuringFullscreenPause[0] ||
+    positionBeforeFullscreenPause[1] !== positionDuringFullscreenPause[1]
+  ) {
+    throw new Error("全屏暂停期间窗口仍在移动");
+  }
+  sendCommand("fullscreen-resume");
+  await delay(260);
+  const positionAfterFullscreenResume = petWindow.getPosition();
+  if (
+    positionDuringFullscreenPause[0] === positionAfterFullscreenResume[0] &&
+    positionDuringFullscreenPause[1] === positionAfterFullscreenResume[1]
+  ) {
+    throw new Error("退出全屏暂停后移动没有恢复");
+  }
   await captureSmokePage("03-movement.png");
   setScale(1.5);
   await delay(250);
