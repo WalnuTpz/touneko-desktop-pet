@@ -455,9 +455,19 @@ function registerIpc() {
     },
   }));
 
-  ipcMain.on("pet:renderer-ready", () => {
+  ipcMain.on("pet:renderer-ready", async () => {
     if (app.commandLine.hasSwitch("smoke-test")) {
-      setTimeout(quitApplication, 1200);
+      setTimeout(async () => {
+        try {
+          const image = await petWindow.webContents.capturePage();
+          const output = path.join(__dirname, "..", "build", "smoke-test.png");
+          fs.mkdirSync(path.dirname(output), { recursive: true });
+          fs.writeFileSync(output, image.toPNG());
+        } catch (error) {
+          console.error("保存冒烟测试截图失败：", error);
+        }
+        quitApplication();
+      }, 800);
     }
   });
 
