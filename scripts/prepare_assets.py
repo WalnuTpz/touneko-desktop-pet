@@ -481,12 +481,12 @@ def main() -> None:
     statistics_data = manifest["statistics"]
     if args.check:
         expected = {
-            "collectionFiles": 145,
+            "collectionFiles": 154,
             "dailyFiles": 20,
             "dailyPairs": 5,
-            "actions": 121,
-            "staticActions": 101,
-            "gifActions": 20,
+            "actions": 130,
+            "staticActions": 109,
+            "gifActions": 21,
             "movementAssets": 4,
         }
         mismatches = {
