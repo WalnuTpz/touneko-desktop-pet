@@ -33,6 +33,7 @@ let readyReported = false;
 let pointerPollInFlight = false;
 let pointerPollTimer = null;
 let pointerPollWarningShown = false;
+let pointerPollStopped = false;
 let bubbleShapeReleaseTimer = null;
 let hoverAnchor = null;
 
@@ -894,11 +895,17 @@ async function pollPointerPosition() {
 }
 
 function schedulePointerPoll() {
+  if (pointerPollStopped) return;
   clearTimeout(pointerPollTimer);
+  const interactive =
+    state &&
+    (state.mode === "daily" || state.mode === "hover") &&
+    !state.clickThrough &&
+    !state.fullscreenPaused;
   pointerPollTimer = setTimeout(async () => {
     await pollPointerPosition();
     schedulePointerPoll();
-  }, POINTER_POLL_INTERVAL_MS);
+  }, interactive ? POINTER_POLL_INTERVAL_MS : 400);
 }
 
 window.addEventListener("mousemove", (event) => {
@@ -1036,6 +1043,7 @@ async function initialize() {
 }
 
 window.addEventListener("beforeunload", () => {
+  pointerPollStopped = true;
   clearTimeout(pointerPollTimer);
   clearTimeout(bubbleShapeReleaseTimer);
 });

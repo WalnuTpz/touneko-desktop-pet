@@ -137,7 +137,9 @@ while (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {
         $extendedStyle = [FullscreenProbe]::GetWindowLong($handle, -20)
         if (
             ($style -band 0x40000000) -ne 0 -or
-            ($extendedStyle -band 0x00000080) -ne 0
+            ($extendedStyle -band 0x00000080) -ne 0 -or
+            ($extendedStyle -band 0x00000020) -ne 0 -or
+            ($extendedStyle -band 0x08000000) -ne 0
         ) {
             continue
         }
