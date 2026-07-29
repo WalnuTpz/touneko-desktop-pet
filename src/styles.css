@@ -1,6 +1,5 @@
 :root {
   color-scheme: light;
-  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
 }
 
 * {
@@ -8,27 +7,19 @@
 }
 
 html,
-body {
+body,
+#pet-stage {
   width: 100%;
   height: 100%;
   margin: 0;
   overflow: hidden;
   background: transparent;
   user-select: none;
-}
-
-body {
   -webkit-user-select: none;
 }
 
 #pet-stage {
   position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: flex-end;
-  justify-content: center;
-  padding: 46px 8px 4px;
   cursor: grab;
 }
 
@@ -37,57 +28,12 @@ body {
 }
 
 #pet-image {
+  position: absolute;
   display: block;
-  max-width: 100%;
-  max-height: 100%;
-  object-fit: contain;
-  object-position: center bottom;
+  max-width: none;
+  max-height: none;
   transform: scaleX(var(--facing, 1));
-  transform-origin: center bottom;
-  filter: drop-shadow(0 5px 3px rgb(0 0 0 / 16%));
+  transform-origin: center center;
   pointer-events: none;
   -webkit-user-drag: none;
-}
-
-#speech-bubble {
-  position: absolute;
-  z-index: 2;
-  top: 7px;
-  left: 50%;
-  min-width: 58px;
-  max-width: calc(100% - 28px);
-  padding: 7px 11px;
-  border: 2px solid #1d1d1d;
-  border-radius: 14px;
-  background: rgb(255 255 255 / 96%);
-  color: #171717;
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.2;
-  text-align: center;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translate(-50%, 6px) scale(0.96);
-  transition:
-    opacity 140ms ease,
-    transform 140ms ease;
-  pointer-events: none;
-}
-
-#speech-bubble::after {
-  position: absolute;
-  left: 50%;
-  bottom: -8px;
-  width: 12px;
-  height: 12px;
-  border-right: 2px solid #1d1d1d;
-  border-bottom: 2px solid #1d1d1d;
-  background: white;
-  content: "";
-  transform: translateX(-50%) rotate(45deg);
-}
-
-#speech-bubble.visible {
-  opacity: 1;
-  transform: translate(-50%, 0) scale(1);
 }
