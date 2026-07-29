@@ -1,0 +1,51 @@
+{
+  "name": "tangmao-desktop-pet",
+  "version": "0.1.0",
+  "description": "使用糖猫素材制作的 Windows 桌面宠物",
+  "main": "src/main.js",
+  "author": "Walnut",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/WalnuTpz/touneko-desktop-pet.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
+    "check:assets": "node tests/check-assets.js",
+    "icon": "python scripts/make_icon.py",
+    "pack": "electron-builder --dir",
+    "dist": "npm run icon && electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "43.2.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "com.walnut.tangmao",
+    "productName": "糖猫桌宠",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "糖猫合集/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "糖猫桌宠-${version}.${ext}"
+    }
+  }
+}

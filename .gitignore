@@ -1,0 +1,15 @@
+# Dependencies and caches
+node_modules/
+*.log
+.DS_Store
+Thumbs.db
+
+# Build output
+build/
+dist/
+release/
+out/
+*.exe
+
+# Local pet assets are intentionally not published
+糖猫合集/
