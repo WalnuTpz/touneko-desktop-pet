@@ -783,6 +783,13 @@ function createWindow() {
   });
 }
 
+if (app.commandLine.hasSwitch("smoke-test")) {
+  app.setPath(
+    "userData",
+    path.join(app.getPath("temp"), "tangmao-desktop-pet-smoke"),
+  );
+}
+
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
