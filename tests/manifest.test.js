@@ -5,6 +5,7 @@ const path = require("node:path");
 const projectRoot = path.join(__dirname, "..");
 const generatedRoot = path.join(projectRoot, "assets", "generated");
 const manifestPath = path.join(generatedRoot, "manifest.json");
+const mainSource = fs.readFileSync(path.join(projectRoot, "src", "main.js"), "utf8");
 
 assert.ok(fs.existsSync(manifestPath), "缺少生成素材清单，请先运行 npm run prepare:assets");
 const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -16,11 +17,15 @@ assert.equal(manifest.staticActions.length, 99);
 assert.equal(manifest.gifActions.length, 15);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 
+const windowWidth = Number(mainSource.match(/const WINDOW_WIDTH = (\d+);/)?.[1]);
+const windowHeight = Number(mainSource.match(/const WINDOW_HEIGHT = (\d+);/)?.[1]);
+assert.ok(windowWidth > 0 && windowHeight > 0);
+
 for (const pair of manifest.daily) {
-  assert.ok(manifest.assets[pair.idle], `日常素材不存在：${pair.idle}`);
+  assert.equal(manifest.assets[pair.idle]?.kind, "static");
   assert.ok(pair.hovers.length >= 1, `日常状态没有悬停图：${pair.id}`);
   for (const hoverId of pair.hovers) {
-    assert.ok(manifest.assets[hoverId], `悬停素材不存在：${hoverId}`);
+    assert.equal(manifest.assets[hoverId]?.kind, "static");
   }
 }
 
@@ -43,6 +48,9 @@ for (const asset of Object.values(manifest.assets)) {
     const framePath = path.join(generatedRoot, ...frame.file.split("/"));
     assert.ok(fs.existsSync(framePath), `生成素材不存在：${frame.file}`);
     assert.ok(frame.bounds.width > 0 && frame.bounds.height > 0);
+    assert.ok(frame.bounds.x >= 0 && frame.bounds.y >= 0);
+    assert.ok(frame.bounds.x + frame.bounds.width <= asset.canvas.width);
+    assert.ok(frame.bounds.y + frame.bounds.height <= asset.canvas.height);
   }
   if (asset.kind === "gif") {
     assert.ok(asset.loopDurationMs > 0);
@@ -51,6 +59,24 @@ for (const asset of Object.values(manifest.assets)) {
       asset.frames.reduce((sum, frame) => sum + frame.durationMs, 0),
     );
   }
+  assert.ok(
+    asset.displaySize.width * 1.5 <= windowWidth,
+    `150% 宽度超出承载窗口：${asset.name}`,
+  );
+  assert.ok(
+    asset.displaySize.height * 1.5 <= windowHeight,
+    `150% 高度超出承载窗口：${asset.name}`,
+  );
+}
+
+for (const representation of manifest.icons.trayRepresentations) {
+  const iconPath = path.join(generatedRoot, ...representation.file.split("/"));
+  const data = fs.readFileSync(iconPath);
+  assert.equal(data.toString("ascii", 1, 4), "PNG");
+  const width = data.readUInt32BE(16);
+  const height = data.readUInt32BE(20);
+  assert.equal(width / representation.scaleFactor, 16);
+  assert.equal(height / representation.scaleFactor, 16);
 }
 
 console.log("manifest.test.js 通过");

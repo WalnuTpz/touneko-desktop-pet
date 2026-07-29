@@ -6,12 +6,17 @@ import json
 import math
 import shutil
 import statistics
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from PIL import Image, ImageFilter, ImageSequence
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

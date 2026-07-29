@@ -2,9 +2,14 @@ from __future__ import annotations
 
 import json
 import math
+import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
