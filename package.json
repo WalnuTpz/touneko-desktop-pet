@@ -19,6 +19,7 @@
     "check:assets": "python scripts/prepare_assets.py --check",
     "test": "npm run prepare:assets && node tests/core.test.js && node tests/dialogue.test.js && node tests/manifest.test.js",
     "catalog:assets": "python scripts/render_asset_catalog.py",
+    "docs:dialogue": "node scripts/render_dialogue_doc.js",
     "icon": "python scripts/make_icon.py",
     "pack": "electron-builder --dir",
     "predist": "npm run prepare:assets",
