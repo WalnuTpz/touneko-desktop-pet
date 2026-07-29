@@ -15,7 +15,7 @@
     "start": "electron .",
     "dev": "electron .",
     "start:smoke": "electron . --smoke-test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/dialogue.js && node --check src/renderer.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/dialogue.js && node --check src/renderer.js && node --check scripts/render_dialogue_doc.js",
     "check:assets": "python scripts/prepare_assets.py --check",
     "test": "npm run prepare:assets && node tests/core.test.js && node tests/dialogue.test.js && node tests/manifest.test.js",
     "catalog:assets": "python scripts/render_asset_catalog.py",
