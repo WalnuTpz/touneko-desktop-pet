@@ -6,6 +6,7 @@ param(
 $signature = @'
 using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 public static class FullscreenProbe
 {
@@ -40,6 +41,12 @@ public static class FullscreenProbe
     public static extern bool IsIconic(IntPtr hWnd);
 
     [DllImport("user32.dll")]
+    public static extern bool IsWindowVisible(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern int GetClassName(IntPtr hWnd, StringBuilder className, int maxCount);
+
+    [DllImport("user32.dll")]
     public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
 
     [DllImport("user32.dll", CharSet = CharSet.Auto)]
@@ -58,12 +65,49 @@ while (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {
         top = 0
         right = 0
         bottom = 0
+        className = ""
+        processName = ""
+        eligible = $false
     }
 
-    if ($handle -ne [IntPtr]::Zero -and -not [FullscreenProbe]::IsIconic($handle)) {
+    if (
+        $handle -ne [IntPtr]::Zero -and
+        [FullscreenProbe]::IsWindowVisible($handle) -and
+        -not [FullscreenProbe]::IsIconic($handle)
+    ) {
         $windowRect = New-Object FullscreenProbe+RECT
         $processId = [uint32]0
         [void][FullscreenProbe]::GetWindowThreadProcessId($handle, [ref]$processId)
+        $classBuilder = New-Object System.Text.StringBuilder 256
+        [void][FullscreenProbe]::GetClassName($handle, $classBuilder, $classBuilder.Capacity)
+        $className = $classBuilder.ToString()
+        $processName = ""
+        try {
+            $processName = (Get-Process -Id $processId -ErrorAction Stop).ProcessName
+        } catch {
+            $processName = ""
+        }
+        $ignoredClasses = @(
+            "Progman",
+            "WorkerW",
+            "Shell_TrayWnd",
+            "Shell_SecondaryTrayWnd",
+            "MultitaskingViewFrame",
+            "XamlExplorerHostIslandWindow"
+        )
+        $ignoredProcesses = @(
+            "dwm",
+            "SearchHost",
+            "ShellExperienceHost",
+            "StartMenuExperienceHost",
+            "TextInputHost"
+        )
+        $eligible =
+            $ignoredClasses -notcontains $className -and
+            $ignoredProcesses -notcontains $processName
+        $result.className = $className
+        $result.processName = $processName
+        $result.eligible = $eligible
         if ([FullscreenProbe]::GetWindowRect($handle, [ref]$windowRect)) {
             $monitorHandle = [FullscreenProbe]::MonitorFromWindow($handle, 2)
             $monitorInfo = New-Object FullscreenProbe+MONITORINFO
@@ -76,7 +120,7 @@ while (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {
                     $windowRect.Right -ge $monitorInfo.rcMonitor.Right - $tolerance -and
                     $windowRect.Bottom -ge $monitorInfo.rcMonitor.Bottom - $tolerance
                 $result.processId = $processId
-                $result.fullscreen = $isFullscreen
+                $result.fullscreen = $isFullscreen -and $eligible
                 $result.left = $monitorInfo.rcMonitor.Left
                 $result.top = $monitorInfo.rcMonitor.Top
                 $result.right = $monitorInfo.rcMonitor.Right

@@ -10,6 +10,7 @@ const {
 const { spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const { StableValueTracker } = require("./core");
 
 const WINDOW_WIDTH = 960;
 const WINDOW_HEIGHT = 900;
@@ -32,6 +33,7 @@ let tray = null;
 let quitting = false;
 let dragState = null;
 let currentLayout = null;
+let currentShapeRegions = [];
 let firstLayout = true;
 let pendingBottomRight = true;
 let manifest = null;
@@ -39,6 +41,7 @@ let fullscreenProcess = null;
 let fullscreenOutput = "";
 let activeFullscreenDisplayId = null;
 let fullscreenSamples = 0;
+const fullscreenStability = new StableValueTracker(null);
 
 function generatedPath(...parts) {
   return path.join(__dirname, "..", "assets", "generated", ...parts);
@@ -169,14 +172,16 @@ function updateWindowShape() {
   ) {
     return;
   }
-  petWindow.setShape([
-    {
-      x: Math.floor(currentLayout.x),
-      y: Math.floor(currentLayout.y),
-      width: Math.max(1, Math.ceil(currentLayout.width)),
-      height: Math.max(1, Math.ceil(currentLayout.height)),
-    },
-  ]);
+  const regions =
+    currentShapeRegions.length > 0 ? currentShapeRegions : [currentLayout];
+  petWindow.setShape(
+    regions.map((region) => ({
+      x: Math.floor(region.x),
+      y: Math.floor(region.y),
+      width: Math.max(1, Math.ceil(region.width)),
+      height: Math.max(1, Math.ceil(region.height)),
+    })),
+  );
 }
 
 function showWindowIfAllowed() {
@@ -340,18 +345,32 @@ function updateFullscreenVisibility() {
 function parseFullscreenLine(line) {
   if (!line.trim()) return;
   try {
-    const state = JSON.parse(line);
+    const fullscreenState = JSON.parse(line);
     fullscreenSamples += 1;
-    if (!state.fullscreen || Number(state.processId) === process.pid) {
-      activeFullscreenDisplayId = null;
-    } else {
+    let candidateDisplayId = null;
+    if (
+      fullscreenState.fullscreen &&
+      fullscreenState.eligible !== false &&
+      Number(fullscreenState.processId) !== process.pid
+    ) {
       const center = {
-        x: Math.round((Number(state.left) + Number(state.right)) / 2),
-        y: Math.round((Number(state.top) + Number(state.bottom)) / 2),
+        x: Math.round(
+          (Number(fullscreenState.left) + Number(fullscreenState.right)) / 2,
+        ),
+        y: Math.round(
+          (Number(fullscreenState.top) + Number(fullscreenState.bottom)) / 2,
+        ),
       };
-      activeFullscreenDisplayId = screen.getDisplayNearestPoint(center).id;
+      candidateDisplayId = screen.getDisplayNearestPoint(center).id;
     }
-    updateFullscreenVisibility();
+    const stable = fullscreenStability.sample(
+      candidateDisplayId,
+      candidateDisplayId === null ? 2 : 3,
+    );
+    if (stable.changed) {
+      activeFullscreenDisplayId = stable.value;
+      updateFullscreenVisibility();
+    }
   } catch {
     // 忽略监测进程退出时可能残留的不完整输出。
   }
@@ -408,6 +427,7 @@ function startFullscreenMonitor() {
   });
   fullscreenProcess.on("exit", () => {
     fullscreenProcess = null;
+    fullscreenStability.reset(null);
     activeFullscreenDisplayId = null;
     if (!quitting) updateFullscreenVisibility();
   });
@@ -478,9 +498,17 @@ function registerIpc() {
   });
 
   ipcMain.on("pet:update-layout", (_event, rect) => {
-    const nextLayout = sanitizeRect(rect);
+    const nextLayout = sanitizeRect(rect?.collision || rect);
     if (!nextLayout || !petWindow || petWindow.isDestroyed()) return;
     currentLayout = nextLayout;
+    const requestedRegions = Array.isArray(rect?.regions) ? rect.regions : [];
+    currentShapeRegions = requestedRegions
+      .map(sanitizeRect)
+      .filter(Boolean)
+      .slice(0, 8);
+    if (currentShapeRegions.length === 0) {
+      currentShapeRegions = [nextLayout];
+    }
     updateWindowShape();
     if (firstLayout || pendingBottomRight) {
       firstLayout = false;
@@ -496,6 +524,18 @@ function registerIpc() {
   ipcMain.on("pet:set-pointer-region", (_event, overPet) => {
     runtime.pointerOverPet = Boolean(overPet);
     updateMouseIgnoring();
+  });
+
+  ipcMain.handle("pet:get-pointer-position", () => {
+    if (!petWindow || petWindow.isDestroyed()) return null;
+    const cursor = screen.getCursorScreenPoint();
+    const bounds = petWindow.getBounds();
+    return {
+      clientX: cursor.x - bounds.x,
+      clientY: cursor.y - bounds.y,
+      screenX: cursor.x,
+      screenY: cursor.y,
+    };
   });
 
   ipcMain.on("pet:drag-start", (_event, point) => {

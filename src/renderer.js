@@ -1,5 +1,6 @@
 const stage = document.querySelector("#pet-stage");
 const petImage = document.querySelector("#pet-image");
+const speechBubble = document.querySelector("#speech-bubble");
 const {
   PausableTimer,
   chooseGifLoopCount,
@@ -8,11 +9,15 @@ const {
   pushRecent,
   randomBetween,
 } = window.PetCore;
+const { dialogueForAsset } = window.PetDialogue;
 
 const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
 const DOUBLE_CLICK_DELAY_MS = 280;
 const DRAG_THRESHOLD = 5;
 const BASELINE_MARGIN = 18;
+const POINTER_POLL_INTERVAL_MS = 80;
+const PET_SHAPE_PADDING = 8;
+const BUBBLE_GAP = 17;
 
 let manifest = null;
 let assets = null;
@@ -25,6 +30,7 @@ let lastPointerRegion = null;
 let lastPointerPosition = null;
 let imageLoaded = false;
 let readyReported = false;
+let pointerPollInFlight = false;
 
 const hitCanvas = document.createElement("canvas");
 const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
@@ -91,6 +97,37 @@ function geometryFor(asset, frame) {
   };
 }
 
+function expandedRect(rect, padding) {
+  return {
+    x: rect.x - padding,
+    y: rect.y - padding,
+    width: rect.width + padding * 2,
+    height: rect.height + padding * 2,
+  };
+}
+
+function positionBubble(geometry) {
+  if (!speechBubble.classList.contains("visible")) return null;
+  const width = speechBubble.offsetWidth;
+  const height = speechBubble.offsetHeight;
+  const halfWidth = width / 2;
+  const desiredCenter =
+    geometry.collision.x + geometry.collision.width / 2;
+  const center = Math.min(
+    windowSize.width - halfWidth - 8,
+    Math.max(halfWidth + 8, desiredCenter),
+  );
+  const top = Math.max(8, geometry.collision.y - height - BUBBLE_GAP);
+  speechBubble.style.left = `${center}px`;
+  speechBubble.style.top = `${top}px`;
+  return {
+    x: center - halfWidth - 4,
+    y: top - 4,
+    width: width + 8,
+    height: height + 16,
+  };
+}
+
 function drawHitCanvas() {
   const asset = currentAsset();
   if (!asset || !imageLoaded || !petImage.naturalWidth) return;
@@ -112,7 +149,15 @@ function updateGeometry() {
   petImage.style.top = `${geometry.imageTop}px`;
   petImage.style.width = `${geometry.imageWidth}px`;
   petImage.style.height = `${geometry.imageHeight}px`;
-  window.desktopPet.updateLayout(geometry.collision);
+  const regions = [
+    expandedRect(geometry.collision, PET_SHAPE_PADDING),
+  ];
+  const bubbleRegion = positionBubble(geometry);
+  if (bubbleRegion) regions.push(bubbleRegion);
+  window.desktopPet.updateLayout({
+    collision: geometry.collision,
+    regions,
+  });
   drawHitCanvas();
 }
 
@@ -295,12 +340,35 @@ function cancelMovement() {
   state.movement = null;
 }
 
+function hideBubble() {
+  if (!speechBubble.classList.contains("visible")) return;
+  speechBubble.classList.remove("visible");
+  if (state?.bubbleTimer) state.bubbleTimer.cancel();
+  updateGeometry();
+}
+
+function showActionBubble(asset, actionDurationMs) {
+  const message = dialogueForAsset(asset.name);
+  if (!message) return;
+  speechBubble.textContent = message;
+  speechBubble.classList.add("visible");
+  const duration = Math.max(
+    1200,
+    Math.min(2800, Number(actionDurationMs) - 120),
+  );
+  state.bubbleTimer.start(duration);
+  if (state.fullscreenPaused) state.bubbleTimer.pause();
+  updateGeometry();
+}
+
 function stopCurrent({ clearPending = false } = {}) {
   state.dailyTimer.cancel();
   state.actionTimer.cancel();
   state.hoverLeaveTimer.cancel();
+  state.bubbleTimer.cancel();
   state.gifPlayer.stop();
   cancelMovement();
+  speechBubble.classList.remove("visible");
   if (clearPending) state.pendingClick = null;
 }
 
@@ -331,6 +399,9 @@ function pickAction(trigger) {
 function enterDaily() {
   stopCurrent();
   setMode("daily");
+  state.dailyCycle += 1;
+  stage.dataset.dailyCycle = String(state.dailyCycle);
+  stage.dataset.behaviorTrigger = "";
   state.currentDaily = pickUniform(manifest.daily);
   state.currentHoverId = null;
   renderFrame(state.currentDaily.idle, 0);
@@ -374,7 +445,7 @@ function finishAction() {
   }
 }
 
-function startAction(assetId) {
+function startAction(assetId, trigger = "automatic") {
   if (!assetId) {
     enterDaily();
     return;
@@ -382,27 +453,29 @@ function startAction(assetId) {
   stopCurrent();
   rememberAsset(assetId);
   const asset = assets[assetId];
+  stage.dataset.behaviorTrigger = trigger;
   if (asset.kind === "gif") {
     setMode("action-gif");
     const loops = chooseGifLoopCount(asset.loopDurationMs);
     state.gifPlayer.start(assetId, loops, finishAction);
+    showActionBubble(asset, asset.loopDurationMs * loops);
     if (state.fullscreenPaused) state.gifPlayer.pause();
   } else {
     setMode("action-static");
     renderFrame(assetId, 0);
-    state.actionTimer.start(
-      randomBetween(
-        manifest.rules.staticDurationMs.min,
-        manifest.rules.staticDurationMs.max,
-      ),
+    const duration = randomBetween(
+      manifest.rules.staticDurationMs.min,
+      manifest.rules.staticDurationMs.max,
     );
+    state.actionTimer.start(duration);
+    showActionBubble(asset, duration);
     if (state.fullscreenPaused) state.actionTimer.pause();
   }
 }
 
 function executeClickIntent(kind) {
   const assetId = pickAction(kind === "double" ? "double-click" : "single-click");
-  startAction(assetId);
+  startAction(assetId, kind);
 }
 
 function queueOrExecuteClick(kind) {
@@ -470,7 +543,7 @@ async function advanceMovement(movement, timestamp) {
   scheduleMovementFrame(movement);
 }
 
-function startRandomMovement() {
+function startRandomMovement(trigger = "automatic") {
   const candidates = movementEntries();
   const allowedIds = pickWithRecent(
     candidates.map((entry) => entry.asset),
@@ -490,6 +563,7 @@ function startRandomMovement() {
   stopCurrent();
   rememberAsset(selected.asset);
   setMode("movement");
+  stage.dataset.behaviorTrigger = trigger;
   renderFrame(selected.asset, 0);
   const movement = {
     name: selected.name,
@@ -516,9 +590,9 @@ function automaticTrigger() {
     return;
   }
   if (Math.random() < manifest.rules.automaticActionProbability) {
-    startAction(pickAction("automatic"));
+    startAction(pickAction("automatic"), "automatic");
   } else {
-    startRandomMovement();
+    startRandomMovement("automatic");
   }
 }
 
@@ -528,6 +602,7 @@ function pauseForFullscreen() {
   state.dailyTimer.pause();
   state.actionTimer.pause();
   state.hoverLeaveTimer.pause();
+  state.bubbleTimer.pause();
   state.gifPlayer.pause();
   if (state.movement?.raf !== null) {
     cancelAnimationFrame(state.movement.raf);
@@ -551,6 +626,9 @@ function resumeFromFullscreen() {
   }
   if (state.mode === "hover") {
     state.hoverLeaveTimer.resume();
+  }
+  if (speechBubble.classList.contains("visible")) {
+    state.bubbleTimer.resume();
   }
 }
 
@@ -596,11 +674,11 @@ function handleCommand(payload) {
   switch (command) {
     case "random-action":
       stopCurrent({ clearPending: true });
-      startAction(pickAction("menu"));
+      startAction(pickAction("menu"), "menu");
       break;
     case "random-movement":
       stopCurrent({ clearPending: true });
-      startRandomMovement();
+      startRandomMovement("menu");
       break;
     case "set-paused":
       setManualPaused(payload.value);
@@ -658,12 +736,29 @@ function updatePointerPosition(clientX, clientY) {
   }
 }
 
+async function pollPointerPosition() {
+  if (pointerPollInFlight || !state) return;
+  pointerPollInFlight = true;
+  try {
+    const point = await window.desktopPet.getPointerPosition();
+    if (!point) return;
+    lastPointerPosition = {
+      x: Number(point.clientX),
+      y: Number(point.clientY),
+    };
+    if (!pointerState) {
+      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y);
+    }
+  } finally {
+    pointerPollInFlight = false;
+  }
+}
+
 window.addEventListener("mousemove", (event) => {
   lastPointerPosition = { x: event.clientX, y: event.clientY };
   updatePointerPosition(event.clientX, event.clientY);
 });
 window.addEventListener("mouseleave", () => {
-  lastPointerPosition = null;
   if (!pointerState) reportPointerRegion(false);
   if (state?.mode === "hover" && !state.hoverLeaveTimer.isActive()) {
     state.hoverLeaveTimer.start(manifest.rules.hoverLeaveDelayMs);
@@ -761,18 +856,22 @@ async function initialize() {
     userScale: Number(bootstrap.runtime.scale) || 1,
     fullscreenPaused: false,
     movement: null,
+    dailyCycle: 0,
     dailyTimer: null,
     actionTimer: null,
     hoverLeaveTimer: null,
+    bubbleTimer: null,
     gifPlayer: new GifPlayer(),
   };
   state.dailyTimer = new PausableTimer(automaticTrigger);
   state.actionTimer = new PausableTimer(finishAction);
   state.hoverLeaveTimer = new PausableTimer(leaveHover);
+  state.bubbleTimer = new PausableTimer(hideBubble);
   window.desktopPet.onCommand(handleCommand);
   stage.dataset.scale = String(state.userScale);
   setFacing(1);
   enterDaily();
+  setInterval(pollPointerPosition, POINTER_POLL_INTERVAL_MS);
 }
 
 initialize().catch((error) => {
