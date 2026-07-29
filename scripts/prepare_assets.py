@@ -24,6 +24,7 @@ ASSETS_ROOT = PROJECT_ROOT / "assets"
 LOCAL_ROOT = ASSETS_ROOT / "local"
 COLLECTION_ROOT = LOCAL_ROOT / "糖猫合集"
 DAILY_ROOT = LOCAL_ROOT / "日常与悬停"
+DRAG_ASSET_PATH = DAILY_ROOT / "倒立.png"
 GENERATED_ROOT = ASSETS_ROOT / "generated"
 STAGING_ROOT = ASSETS_ROOT / "generated-staging"
 OVERRIDES_PATH = PROJECT_ROOT / "scripts" / "asset-overrides.json"
@@ -291,6 +292,12 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
     builder = AssetBuilder(output_root, overrides)
     daily_pairs, daily_asset_ids = build_daily_pairs(builder)
 
+    if not DRAG_ASSET_PATH.is_file():
+        raise FileNotFoundError(f"缺少拖拽素材：{DRAG_ASSET_PATH}")
+    drag_asset_id = builder.register(DRAG_ASSET_PATH)
+    if builder.assets[drag_asset_id]["kind"] != "static":
+        raise ValueError("倒立.png 必须是静态图片")
+
     movement: dict[str, dict[str, Any]] = {}
     movement_asset_ids: set[str] = set()
     for movement_name, filename in MOVEMENT_FILES.items():
@@ -308,7 +315,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
     collection_asset_ids = [builder.register(path) for path in collection_files]
     action_ids: list[str] = []
     seen_action_ids: set[str] = set()
-    excluded_ids = daily_asset_ids | movement_asset_ids
+    excluded_ids = daily_asset_ids | movement_asset_ids | {drag_asset_id}
     for asset_id in collection_asset_ids:
         if asset_id in excluded_ids or asset_id in seen_action_ids:
             continue
@@ -358,6 +365,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "staticActions": static_action_ids,
         "gifActions": gif_action_ids,
         "movement": movement,
+        "dragAsset": drag_asset_id,
         "iconAsset": stand_asset_id,
         "icons": icon_files,
         "assets": builder.assets,
@@ -469,10 +477,10 @@ def main() -> None:
     if args.check:
         expected = {
             "collectionFiles": 135,
-            "dailyFiles": 19,
+            "dailyFiles": 20,
             "dailyPairs": 5,
-            "actions": 112,
-            "staticActions": 97,
+            "actions": 111,
+            "staticActions": 96,
             "gifActions": 15,
             "movementAssets": 4,
         }

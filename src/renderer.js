@@ -433,9 +433,67 @@ function cancelMovement() {
 
 function bubbleOccupiesShape() {
   return (
+    state?.mode !== "dragging" &&
     speechBubble.classList.contains("visible") ||
-    speechBubble.classList.contains("fading")
+    (state?.mode !== "dragging" &&
+      speechBubble.classList.contains("fading"))
   );
+}
+
+function beginDragVisual() {
+  if (state.mode === "dragging" || !manifest.dragAsset) return;
+  const movement = state.movement;
+  state.dragSnapshot = {
+    mode: state.mode,
+    assetId: state.currentAssetId,
+    frameIndex: state.currentFrameIndex,
+    resumeDailyTimer: state.dailyTimer.running,
+    resumeActionTimer: state.actionTimer.running,
+    resumeHoverLeaveTimer: state.hoverLeaveTimer.running,
+    resumeBubbleTimer: state.bubbleTimer.running,
+    resumeGif: state.gifPlayer.isActive() && !state.gifPlayer.paused,
+    resumeMovement: Boolean(movement),
+  };
+  state.dailyTimer.pause();
+  state.actionTimer.pause();
+  state.hoverLeaveTimer.pause();
+  state.bubbleTimer.pause();
+  state.gifPlayer.pause();
+  if (movement) {
+    movement.token += 1;
+    if (movement.raf !== null) {
+      cancelAnimationFrame(movement.raf);
+      movement.raf = null;
+    }
+    movement.lastTimestamp = null;
+  }
+  setMode("dragging");
+  stage.classList.add("dragging");
+  renderFrame(manifest.dragAsset, 0);
+}
+
+function endDragVisual() {
+  const snapshot = state.dragSnapshot;
+  if (!snapshot) {
+    stage.classList.remove("dragging");
+    return;
+  }
+  state.dragSnapshot = null;
+  stage.classList.remove("dragging");
+  setMode(snapshot.mode);
+  renderFrame(snapshot.assetId, snapshot.frameIndex);
+  if (state.fullscreenPaused) return;
+  if (snapshot.resumeDailyTimer && !state.manualPaused) {
+    state.dailyTimer.resume();
+  }
+  if (snapshot.resumeActionTimer) state.actionTimer.resume();
+  if (snapshot.resumeHoverLeaveTimer) state.hoverLeaveTimer.resume();
+  if (snapshot.resumeBubbleTimer) state.bubbleTimer.resume();
+  if (snapshot.resumeGif) state.gifPlayer.resume();
+  if (snapshot.resumeMovement && state.movement) {
+    state.movement.lastTimestamp = null;
+    scheduleMovementFrame(state.movement);
+  }
 }
 
 function releaseBubbleShape() {
@@ -734,8 +792,8 @@ function automaticTrigger() {
 
 function pauseForFullscreen() {
   if (state.fullscreenPaused) return;
-  cancelPointerInteraction();
   state.fullscreenPaused = true;
+  cancelPointerInteraction();
   state.dailyTimer.pause();
   state.actionTimer.pause();
   state.hoverLeaveTimer.pause();
@@ -945,7 +1003,6 @@ stage.addEventListener("pointerdown", (event) => {
     moved: false,
   };
   stage.setPointerCapture(event.pointerId);
-  stage.classList.add("dragging");
   window.desktopPet.dragStart({
     screenX: event.screenX,
     screenY: event.screenY,
@@ -958,7 +1015,14 @@ stage.addEventListener("pointermove", async (event) => {
     event.screenX - pointerState.startX,
     event.screenY - pointerState.startY,
   );
-  if (distance > DRAG_THRESHOLD) pointerState.moved = true;
+  if (distance > DRAG_THRESHOLD && !pointerState.moved) {
+    pointerState.moved = true;
+    beginDragVisual();
+    window.desktopPet.dragStart({
+      screenX: event.screenX,
+      screenY: event.screenY,
+    });
+  }
   if (!pointerState.moved) return;
   const result = await window.desktopPet.dragMove({
     screenX: event.screenX,
@@ -969,29 +1033,36 @@ stage.addEventListener("pointermove", async (event) => {
 
 function cancelPointerInteraction() {
   if (!pointerState) {
+    endDragVisual();
     window.desktopPet.dragEnd();
     return;
   }
   const pointerId = pointerState.id;
   pointerState = null;
-  stage.classList.remove("dragging");
   if (stage.hasPointerCapture(pointerId)) {
     stage.releasePointerCapture(pointerId);
   }
+  endDragVisual();
   window.desktopPet.dragEnd();
 }
 
 function finishPointer(event) {
   if (!pointerState || pointerState.id !== event.pointerId) return;
-  if (pointerState.moved) {
+  const moved = pointerState.moved;
+  if (moved) {
     suppressClickUntil = Date.now() + 400;
   }
   pointerState = null;
-  stage.classList.remove("dragging");
   if (stage.hasPointerCapture(event.pointerId)) {
     stage.releasePointerCapture(event.pointerId);
   }
+  endDragVisual();
   window.desktopPet.dragEnd();
+  if (lastPointerPosition) {
+    queueMicrotask(() =>
+      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y),
+    );
+  }
 }
 
 stage.addEventListener("pointerup", finishPointer);
@@ -1038,6 +1109,7 @@ async function initialize() {
     userScale: Number(bootstrap.runtime.scale) || 1,
     fullscreenPaused: false,
     movement: null,
+    dragSnapshot: null,
     dailyCycle: 0,
     dailyTimer: null,
     actionTimer: null,

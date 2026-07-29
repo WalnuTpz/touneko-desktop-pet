@@ -28,6 +28,10 @@ body,
   cursor: grabbing;
 }
 
+#pet-stage.dragging #speech-bubble {
+  opacity: 0;
+}
+
 #pet-image {
   position: absolute;
   display: block;
