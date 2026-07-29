@@ -50,8 +50,23 @@ assert.equal(openingDialogueForLaunch(() => 0.25), OPENING_DIALOGUE[1]);
 assert.equal(openingDialogueForLaunch(() => 0.5), OPENING_DIALOGUE[2]);
 assert.equal(openingDialogueForLaunch(() => 0.75), OPENING_DIALOGUE[3]);
 assert.equal(OPENING_DIALOGUE.length, 4);
+assert.equal(new Set(OPENING_DIALOGUE).size, 4);
 for (const message of OPENING_DIALOGUE) {
   assert.ok(message.length >= 12 && message.length <= 24);
+}
+
+for (const [name, messages] of Object.entries(ACTION_DIALOGUE)) {
+  assert.equal(messages.length, 4, `主题应有四条气泡文案：${name}`);
+  assert.equal(
+    new Set(messages).size,
+    4,
+    `主题的四条气泡文案不能相同：${name}`,
+  );
+  for (const message of messages) {
+    assert.equal(typeof message, "string");
+    assert.ok(message.trim().length > 0);
+    assert.ok(message.length >= 2 && message.length <= 24);
+  }
 }
 
 for (const actionId of manifest.actions) {
@@ -62,17 +77,7 @@ for (const actionId of manifest.actions) {
     `普通动作缺少专属气泡文案：${asset.name}`,
   );
   const messages = messagesForAsset(asset.name);
-  assert.equal(messages.length, 4, `动作应有四条气泡文案：${asset.name}`);
-  assert.equal(
-    new Set(messages).size,
-    4,
-    `动作的四条气泡文案不能相同：${asset.name}`,
-  );
-  for (const message of messages) {
-    assert.equal(typeof message, "string");
-    assert.ok(message.trim().length > 0);
-    assert.ok(message.length >= 2 && message.length <= 24);
-  }
+  assert.equal(messages, ACTION_DIALOGUE[normalizedName]);
 }
 
 console.log("dialogue.test.js 通过");
