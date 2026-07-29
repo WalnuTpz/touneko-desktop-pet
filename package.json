@@ -1,7 +1,7 @@
 {
   "name": "tangmao-desktop-pet",
-  "version": "0.1.0",
-  "description": "使用糖猫素材制作的 Windows 桌面宠物",
+  "version": "0.2.0",
+  "description": "安静陪伴与卖萌的 Windows 糖猫桌面宠物",
   "main": "src/main.js",
   "author": "Walnut",
   "license": "UNLICENSED",
@@ -10,12 +10,17 @@
     "url": "https://github.com/WalnuTpz/touneko-desktop-pet.git"
   },
   "scripts": {
+    "prepare:assets": "python scripts/prepare_assets.py --check",
+    "prestart": "npm run prepare:assets",
     "start": "electron .",
     "dev": "electron .",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/renderer.js",
-    "check:assets": "node tests/check-assets.js",
+    "start:smoke": "electron . --smoke-test",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/renderer.js",
+    "check:assets": "python scripts/prepare_assets.py --check",
+    "test": "npm run prepare:assets && node tests/core.test.js && node tests/manifest.test.js",
     "icon": "python scripts/make_icon.py",
     "pack": "electron-builder --dir",
+    "predist": "npm run prepare:assets",
     "dist": "npm run icon && electron-builder --win portable"
   },
   "devDependencies": {
@@ -28,8 +33,12 @@
     "asar": true,
     "files": [
       "src/**/*",
-      "assets/local/糖猫合集/**/*",
+      "assets/generated/**/*",
+      "scripts/fullscreen-monitor.ps1",
       "package.json"
+    ],
+    "asarUnpack": [
+      "scripts/fullscreen-monitor.ps1"
     ],
     "directories": {
       "buildResources": "build",
