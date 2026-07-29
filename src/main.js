@@ -156,8 +156,26 @@ function sendCommand(command, payload = {}) {
 
 function updateMouseIgnoring() {
   if (!petWindow || petWindow.isDestroyed()) return;
-  const ignored = runtime.clickThrough || !runtime.pointerOverPet;
-  petWindow.setIgnoreMouseEvents(ignored, { forward: true });
+  petWindow.setIgnoreMouseEvents(runtime.clickThrough, { forward: true });
+}
+
+function updateWindowShape() {
+  if (
+    !petWindow ||
+    petWindow.isDestroyed() ||
+    !currentLayout ||
+    typeof petWindow.setShape !== "function"
+  ) {
+    return;
+  }
+  petWindow.setShape([
+    {
+      x: Math.floor(currentLayout.x),
+      y: Math.floor(currentLayout.y),
+      width: Math.max(1, Math.ceil(currentLayout.width)),
+      height: Math.max(1, Math.ceil(currentLayout.height)),
+    },
+  ]);
 }
 
 function showWindowIfAllowed() {
@@ -447,6 +465,7 @@ function registerIpc() {
     const nextLayout = sanitizeRect(rect);
     if (!nextLayout || !petWindow || petWindow.isDestroyed()) return;
     currentLayout = nextLayout;
+    updateWindowShape();
     if (firstLayout || pendingBottomRight) {
       firstLayout = false;
       pendingBottomRight = false;
@@ -562,7 +581,7 @@ function createWindow() {
   runtime.currentDisplayId = screen.getPrimaryDisplay().id;
   petWindow.setMenu(null);
   petWindow.setAlwaysOnTop(true, "floating");
-  petWindow.setIgnoreMouseEvents(true, { forward: true });
+  petWindow.setIgnoreMouseEvents(false);
   petWindow.loadFile(path.join(__dirname, "index.html"));
   petWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   petWindow.webContents.on("will-navigate", (event) => event.preventDefault());

@@ -526,7 +526,7 @@ function pauseForFullscreen() {
 function resumeFromFullscreen() {
   if (!state.fullscreenPaused) return;
   state.fullscreenPaused = false;
-  if ((state.mode === "daily" || state.mode === "hover") && !state.manualPaused) {
+  if (state.mode === "daily" && !state.manualPaused) {
     state.dailyTimer.resume();
   } else if (state.mode === "action-static") {
     state.actionTimer.resume();
@@ -649,6 +649,7 @@ window.addEventListener("mouseleave", () => {
   if (!pointerState) reportPointerRegion(false);
   if (state?.mode === "hover" && !state.hoverLeaveTimer.isActive()) {
     state.hoverLeaveTimer.start(manifest.rules.hoverLeaveDelayMs);
+    if (state.fullscreenPaused) state.hoverLeaveTimer.pause();
   }
 });
 
