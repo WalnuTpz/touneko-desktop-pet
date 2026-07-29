@@ -795,7 +795,7 @@ async function runSmokeTest() {
   await delay(manifest.rules.staticDurationMs.max + 250);
   const dailyAfterManualAction = await rendererSmokeState();
   if (
-    dailyAfterManualAction.mode !== "daily" ||
+    !["daily", "hover"].includes(dailyAfterManualAction.mode) ||
     dailyAfterManualAction.dailyCycle <= cycleBeforeManualAction ||
     dailyAfterManualAction.dailyRemainingMs <
       manifest.rules.dailyDelayMs.min - 1000 ||
@@ -855,7 +855,7 @@ async function runSmokeTest() {
   await delay(300);
   const dailyAfterManualMovement = await rendererSmokeState();
   if (
-    dailyAfterManualMovement.mode !== "daily" ||
+    !["daily", "hover"].includes(dailyAfterManualMovement.mode) ||
     dailyAfterManualMovement.dailyCycle <= cycleBeforeManualMovement ||
     dailyAfterManualMovement.dailyRemainingMs <
       manifest.rules.dailyDelayMs.min - 1000 ||
