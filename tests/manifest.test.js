@@ -20,6 +20,7 @@ assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
 assert.deepEqual(manifest.rules.staticDurationMs, { min: 2_000, max: 4_000 });
 assert.deepEqual(manifest.rules.gifDurationMs, { min: 3_000, max: 6_000 });
 assert.deepEqual(manifest.rules.movementDurationMs, { min: 3_000, max: 8_000 });
+assert.equal(manifest.rules.openingBubbleDurationMs, 3_500);
 assert.equal(manifest.rules.baseDisplayScale, 0.8);
 assert.equal(manifest.assets[manifest.dragAsset]?.kind, "static");
 assert.ok(!manifest.actions.includes(manifest.dragAsset));

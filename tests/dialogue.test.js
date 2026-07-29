@@ -3,10 +3,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 const {
   ACTION_DIALOGUE,
+  OPENING_DIALOGUE,
   bubbleMessageForAction,
   dialogueForAsset,
   messagesForAsset,
   normalizeAssetName,
+  openingDialogueForLaunch,
 } = require("../src/dialogue");
 
 const projectRoot = path.join(__dirname, "..");
@@ -43,6 +45,14 @@ assert.equal(
   bubbleMessageForAction("爱你", () => 0.75),
   "最最喜欢你啦～",
 );
+assert.equal(openingDialogueForLaunch(() => 0), OPENING_DIALOGUE[0]);
+assert.equal(openingDialogueForLaunch(() => 0.25), OPENING_DIALOGUE[1]);
+assert.equal(openingDialogueForLaunch(() => 0.5), OPENING_DIALOGUE[2]);
+assert.equal(openingDialogueForLaunch(() => 0.75), OPENING_DIALOGUE[3]);
+assert.equal(OPENING_DIALOGUE.length, 4);
+for (const message of OPENING_DIALOGUE) {
+  assert.ok(message.length >= 12 && message.length <= 24);
+}
 
 for (const actionId of manifest.actions) {
   const asset = manifest.assets[actionId];

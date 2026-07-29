@@ -357,6 +357,13 @@
     ),
   );
 
+  const OPENING_DIALOGUE = Object.freeze([
+    "糖猫今天也来陪你一起摸鱼啦！",
+    "新的一天，请多关照这只小糖猫哦！",
+    "我来啦，今天也负责把你逗开心！",
+    "桌面巡逻开始，有需要就摸摸我吧！",
+  ]);
+
   function normalizeAssetName(name) {
     return String(name || "").replace(/^\d+_/, "").trim();
   }
@@ -387,11 +394,23 @@
     return dialogueForAsset(name, random);
   }
 
+  function openingDialogueForLaunch(random = Math.random) {
+    const index = Math.min(
+      OPENING_DIALOGUE.length - 1,
+      Math.floor(
+        Math.max(0, Math.min(0.999999, random())) * OPENING_DIALOGUE.length,
+      ),
+    );
+    return OPENING_DIALOGUE[index];
+  }
+
   return {
     ACTION_DIALOGUE,
+    OPENING_DIALOGUE,
     bubbleMessageForAction,
     dialogueForAsset,
     messagesForAsset,
     normalizeAssetName,
+    openingDialogueForLaunch,
   };
 });

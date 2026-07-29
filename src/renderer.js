@@ -12,6 +12,7 @@ const {
 const {
   bubbleMessageForAction,
   dialogueForAsset,
+  openingDialogueForLaunch,
 } = window.PetDialogue;
 
 const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
@@ -431,12 +432,15 @@ function cancelMovement() {
   state.movement = null;
 }
 
-function bubbleOccupiesShape() {
+function bubbleIsPresent() {
   return (
-    state?.mode !== "dragging" &&
-    (speechBubble.classList.contains("visible") ||
-      speechBubble.classList.contains("fading"))
+    speechBubble.classList.contains("visible") ||
+    speechBubble.classList.contains("fading")
   );
+}
+
+function bubbleOccupiesShape() {
+  return state?.mode !== "dragging" && bubbleIsPresent();
 }
 
 function beginDragVisual() {
@@ -505,7 +509,7 @@ function releaseBubbleShape() {
 function hideBubble(immediate = false) {
   clearTimeout(bubbleShapeReleaseTimer);
   bubbleShapeReleaseTimer = null;
-  if (!bubbleOccupiesShape()) return;
+  if (!bubbleIsPresent()) return;
   speechBubble.classList.remove("visible");
   if (state?.bubbleTimer) state.bubbleTimer.cancel();
   if (immediate) {
@@ -519,23 +523,34 @@ function hideBubble(immediate = false) {
   bubbleShapeReleaseTimer = setTimeout(releaseBubbleShape, 170);
 }
 
-function showActionBubble(asset, actionDurationMs, force = false) {
-  const message = force
-    ? dialogueForAsset(asset.name, () => 0)
-    : bubbleMessageForAction(asset.name);
+function showBubble(message, durationMs) {
   if (!message) return;
   clearTimeout(bubbleShapeReleaseTimer);
   bubbleShapeReleaseTimer = null;
   speechBubble.classList.remove("fading");
   speechBubble.textContent = message;
   speechBubble.classList.add("visible");
+  state.bubbleTimer.start(Math.max(800, Number(durationMs) || 0));
+  if (state.fullscreenPaused) state.bubbleTimer.pause();
+  updateGeometry();
+}
+
+function showActionBubble(asset, actionDurationMs, force = false) {
+  const message = force
+    ? dialogueForAsset(asset.name, () => 0)
+    : bubbleMessageForAction(asset.name);
   const duration = Math.max(
     1200,
     Math.min(2800, Number(actionDurationMs) - 120),
   );
-  state.bubbleTimer.start(duration);
-  if (state.fullscreenPaused) state.bubbleTimer.pause();
-  updateGeometry();
+  showBubble(message, duration);
+}
+
+function showOpeningBubble() {
+  showBubble(
+    openingDialogueForLaunch(),
+    manifest.rules.openingBubbleDurationMs,
+  );
 }
 
 function stopCurrent({ clearPending = false } = {}) {
@@ -1134,6 +1149,7 @@ async function initialize() {
   stage.dataset.scale = String(state.userScale);
   setFacing(1);
   enterDaily();
+  showOpeningBubble();
   schedulePointerPoll();
 }
 
