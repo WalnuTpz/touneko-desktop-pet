@@ -12,9 +12,9 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
 assert.equal(manifest.schemaVersion, 2);
 assert.equal(manifest.daily.length, 5);
-assert.equal(manifest.actions.length, 111);
-assert.equal(manifest.staticActions.length, 96);
-assert.equal(manifest.gifActions.length, 15);
+assert.equal(manifest.actions.length, 121);
+assert.equal(manifest.staticActions.length, 101);
+assert.equal(manifest.gifActions.length, 20);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
 assert.deepEqual(manifest.rules.staticDurationMs, { min: 2_000, max: 4_000 });
@@ -114,6 +114,28 @@ for (const representation of manifest.icons.trayRepresentations) {
 function assetBySource(source) {
   return Object.values(manifest.assets).find((asset) =>
     asset.sources.includes(source),
+  );
+}
+
+const newlyAddedActions = [
+  ["assets/local/糖猫合集/nb.png", "static"],
+  ["assets/local/糖猫合集/qu.png", "static"],
+  ["assets/local/糖猫合集/呐喊.png", "static"],
+  ["assets/local/糖猫合集/舞萌猫.png", "static"],
+  ["assets/local/糖猫合集/鸟.png", "static"],
+  ["assets/local/糖猫合集/动图/兴奋品尝.gif", "gif"],
+  ["assets/local/糖猫合集/动图/大口吃.gif", "gif"],
+  ["assets/local/糖猫合集/动图/抛手.gif", "gif"],
+  ["assets/local/糖猫合集/动图/睡觉与起床.gif", "gif"],
+  ["assets/local/糖猫合集/动图/蛆爬行.gif", "gif"],
+];
+for (const [source, kind] of newlyAddedActions) {
+  const asset = assetBySource(source);
+  assert.ok(asset, `未导入新增素材：${source}`);
+  assert.equal(asset.kind, kind, `新增素材类型错误：${source}`);
+  assert.ok(
+    manifest.actions.includes(asset.id),
+    `新增素材未进入普通动作池：${source}`,
   );
 }
 
