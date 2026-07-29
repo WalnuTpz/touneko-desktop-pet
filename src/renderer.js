@@ -31,9 +31,17 @@ let lastPointerPosition = null;
 let imageLoaded = false;
 let readyReported = false;
 let pointerPollInFlight = false;
+let pointerPollTimer = null;
+let pointerPollWarningShown = false;
+let bubbleShapeReleaseTimer = null;
+let hoverAnchor = null;
 
 const hitCanvas = document.createElement("canvas");
 const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
+const hoverAnchorCanvas = document.createElement("canvas");
+const hoverAnchorContext = hoverAnchorCanvas.getContext("2d", {
+  willReadFrequently: true,
+});
 
 function assetUrl(relativePath) {
   return new URL(relativePath, GENERATED_ROOT).href;
@@ -75,7 +83,10 @@ function geometryFor(asset, frame) {
   const imageWidth = asset.canvas.width * scale;
   const imageHeight = asset.canvas.height * scale;
   const imageLeft = (windowSize.width - imageWidth) / 2;
-  const imageTop = windowSize.height - BASELINE_MARGIN - imageHeight;
+  const imageLayoutTop = windowSize.height - BASELINE_MARGIN - imageHeight;
+  const hoverLift =
+    state.mode === "hover" && asset.id === state.currentHoverId ? -4 : 0;
+  const imageTop = imageLayoutTop + hoverLift;
   const sourceBounds = frame.bounds;
   const sourceX =
     state.facing > 0
@@ -88,6 +99,11 @@ function geometryFor(asset, frame) {
     imageHeight,
     imageLeft,
     imageTop,
+    imageLayoutTop,
+    bubbleAnchor: {
+      centerX: imageLeft + imageWidth / 2,
+      topY: imageTop + asset.contentBounds.y * scale,
+    },
     collision: {
       x: imageLeft + sourceX * scale - padding,
       y: imageTop + sourceBounds.y * scale - padding,
@@ -107,17 +123,19 @@ function expandedRect(rect, padding) {
 }
 
 function positionBubble(geometry) {
-  if (!speechBubble.classList.contains("visible")) return null;
+  if (!bubbleOccupiesShape()) return null;
   const width = speechBubble.offsetWidth;
   const height = speechBubble.offsetHeight;
   const halfWidth = width / 2;
-  const desiredCenter =
-    geometry.collision.x + geometry.collision.width / 2;
+  const desiredCenter = geometry.bubbleAnchor.centerX;
   const center = Math.min(
     windowSize.width - halfWidth - 8,
     Math.max(halfWidth + 8, desiredCenter),
   );
-  const top = Math.max(8, geometry.collision.y - height - BUBBLE_GAP);
+  const top = Math.max(
+    8,
+    geometry.bubbleAnchor.topY - height - BUBBLE_GAP,
+  );
   speechBubble.style.left = `${center}px`;
   speechBubble.style.top = `${top}px`;
   return {
@@ -146,12 +164,22 @@ function updateGeometry() {
   if (!asset || !frame) return;
   const geometry = geometryFor(asset, frame);
   petImage.style.left = `${geometry.imageLeft}px`;
-  petImage.style.top = `${geometry.imageTop}px`;
+  petImage.style.top = `${geometry.imageLayoutTop}px`;
   petImage.style.width = `${geometry.imageWidth}px`;
   petImage.style.height = `${geometry.imageHeight}px`;
   const regions = [
     expandedRect(geometry.collision, PET_SHAPE_PADDING),
   ];
+  if (state.mode === "hover" && hoverAnchor) {
+    const idleAsset = assets[hoverAnchor.assetId];
+    const idleFrame = idleAsset?.frames[hoverAnchor.frameIndex];
+    if (idleAsset && idleFrame) {
+      const idleGeometry = geometryFor(idleAsset, idleFrame);
+      regions.push(
+        expandedRect(idleGeometry.collision, PET_SHAPE_PADDING),
+      );
+    }
+  }
   const bubbleRegion = positionBubble(geometry);
   if (bubbleRegion) regions.push(bubbleRegion);
   window.desktopPet.updateLayout({
@@ -203,13 +231,15 @@ petImage.addEventListener("error", () => {
   console.error("桌宠素材载入失败：", petImage.src);
 });
 
-function hitTest(clientX, clientY, tolerance = 0) {
-  const asset = currentAsset();
-  const frame = currentFrame();
-  if (!asset || !frame || !imageLoaded || !hitCanvas.width || !hitCanvas.height) {
-    return false;
-  }
-  const geometry = geometryFor(asset, frame);
+function hitTestCanvas(
+  canvas,
+  context,
+  geometry,
+  clientX,
+  clientY,
+  tolerance = 0,
+) {
+  if (!canvas.width || !canvas.height) return false;
   let x = clientX - geometry.imageLeft;
   const y = clientY - geometry.imageTop;
   if (state.facing < 0) {
@@ -224,15 +254,18 @@ function hitTest(clientX, clientY, tolerance = 0) {
     return false;
   }
 
-  const centerX = Math.round(x);
-  const centerY = Math.round(y);
-  const radius = Math.max(0, Math.round(tolerance));
-  const startX = Math.max(0, centerX - radius);
-  const startY = Math.max(0, centerY - radius);
-  const endX = Math.min(hitCanvas.width - 1, centerX + radius);
-  const endY = Math.min(hitCanvas.height - 1, centerY + radius);
+  const scaleX = canvas.width / geometry.imageWidth;
+  const scaleY = canvas.height / geometry.imageHeight;
+  const centerX = Math.round(x * scaleX);
+  const centerY = Math.round(y * scaleY);
+  const radiusX = Math.max(0, Math.ceil(tolerance * scaleX));
+  const radiusY = Math.max(0, Math.ceil(tolerance * scaleY));
+  const startX = Math.max(0, centerX - radiusX);
+  const startY = Math.max(0, centerY - radiusY);
+  const endX = Math.min(canvas.width - 1, centerX + radiusX);
+  const endY = Math.min(canvas.height - 1, centerY + radiusY);
   if (endX < startX || endY < startY) return false;
-  const pixels = hitContext.getImageData(
+  const pixels = context.getImageData(
     startX,
     startY,
     endX - startX + 1,
@@ -243,6 +276,60 @@ function hitTest(clientX, clientY, tolerance = 0) {
     if (pixels[index] >= threshold) return true;
   }
   return false;
+}
+
+function hitTest(clientX, clientY, tolerance = 0) {
+  const asset = currentAsset();
+  const frame = currentFrame();
+  if (!asset || !frame || !imageLoaded) return false;
+  return hitTestCanvas(
+    hitCanvas,
+    hitContext,
+    geometryFor(asset, frame),
+    clientX,
+    clientY,
+    tolerance,
+  );
+}
+
+function captureHoverAnchor() {
+  if (
+    !state.currentDaily ||
+    !imageLoaded ||
+    !hitCanvas.width ||
+    !hitCanvas.height
+  ) {
+    return false;
+  }
+  hoverAnchorCanvas.width = hitCanvas.width;
+  hoverAnchorCanvas.height = hitCanvas.height;
+  hoverAnchorContext.clearRect(
+    0,
+    0,
+    hoverAnchorCanvas.width,
+    hoverAnchorCanvas.height,
+  );
+  hoverAnchorContext.drawImage(hitCanvas, 0, 0);
+  hoverAnchor = {
+    assetId: state.currentDaily.idle,
+    frameIndex: state.currentFrameIndex,
+  };
+  return true;
+}
+
+function hitTestHoverAnchor(clientX, clientY, tolerance = 0) {
+  if (!hoverAnchor) return false;
+  const asset = assets[hoverAnchor.assetId];
+  const frame = asset?.frames[hoverAnchor.frameIndex];
+  if (!asset || !frame) return false;
+  return hitTestCanvas(
+    hoverAnchorCanvas,
+    hoverAnchorContext,
+    geometryFor(asset, frame),
+    clientX,
+    clientY,
+    tolerance,
+  );
 }
 
 class GifPlayer {
@@ -340,16 +427,43 @@ function cancelMovement() {
   state.movement = null;
 }
 
-function hideBubble() {
-  if (!speechBubble.classList.contains("visible")) return;
+function bubbleOccupiesShape() {
+  return (
+    speechBubble.classList.contains("visible") ||
+    speechBubble.classList.contains("fading")
+  );
+}
+
+function releaseBubbleShape() {
+  bubbleShapeReleaseTimer = null;
+  speechBubble.classList.remove("fading");
+  speechBubble.textContent = "";
+  updateGeometry();
+}
+
+function hideBubble(immediate = false) {
+  clearTimeout(bubbleShapeReleaseTimer);
+  bubbleShapeReleaseTimer = null;
+  if (!bubbleOccupiesShape()) return;
   speechBubble.classList.remove("visible");
   if (state?.bubbleTimer) state.bubbleTimer.cancel();
+  if (immediate) {
+    speechBubble.classList.remove("fading");
+    speechBubble.textContent = "";
+    updateGeometry();
+    return;
+  }
+  speechBubble.classList.add("fading");
   updateGeometry();
+  bubbleShapeReleaseTimer = setTimeout(releaseBubbleShape, 170);
 }
 
 function showActionBubble(asset, actionDurationMs) {
   const message = dialogueForAsset(asset.name);
   if (!message) return;
+  clearTimeout(bubbleShapeReleaseTimer);
+  bubbleShapeReleaseTimer = null;
+  speechBubble.classList.remove("fading");
   speechBubble.textContent = message;
   speechBubble.classList.add("visible");
   const duration = Math.max(
@@ -368,8 +482,13 @@ function stopCurrent({ clearPending = false } = {}) {
   state.bubbleTimer.cancel();
   state.gifPlayer.stop();
   cancelMovement();
-  speechBubble.classList.remove("visible");
-  if (clearPending) state.pendingClick = null;
+  hideBubble(true);
+  hoverAnchor = null;
+  if (clearPending) {
+    state.pendingClick = null;
+    clearTimeout(clickTimer);
+    clickTimer = null;
+  }
 }
 
 function rememberAsset(assetId) {
@@ -417,6 +536,7 @@ function enterDaily() {
 
 function enterHover() {
   if (state.mode !== "daily" || !state.currentDaily) return;
+  if (!captureHoverAnchor()) return;
   state.dailyTimer.pause();
   state.hoverLeaveTimer.cancel();
   setMode("hover");
@@ -429,6 +549,7 @@ function leaveHover() {
   state.hoverLeaveTimer.cancel();
   setMode("daily");
   state.currentHoverId = null;
+  hoverAnchor = null;
   renderFrame(state.currentDaily.idle, 0);
   if (!state.manualPaused && !state.fullscreenPaused) {
     state.dailyTimer.resume();
@@ -598,6 +719,7 @@ function automaticTrigger() {
 
 function pauseForFullscreen() {
   if (state.fullscreenPaused) return;
+  cancelPointerInteraction();
   state.fullscreenPaused = true;
   state.dailyTimer.pause();
   state.actionTimer.pause();
@@ -651,6 +773,7 @@ function setUserScale(value) {
 }
 
 function hideRuntime() {
+  cancelPointerInteraction();
   stopCurrent({ clearPending: true });
   setMode("hidden");
   state.currentDaily = null;
@@ -685,6 +808,7 @@ function handleCommand(payload) {
       break;
     case "set-click-through":
       state.clickThrough = Boolean(payload.value);
+      if (state.clickThrough) cancelPointerInteraction();
       if (state.clickThrough && state.mode === "hover") leaveHover();
       reportPointerRegion(false);
       break;
@@ -713,7 +837,7 @@ function updatePointerPosition(clientX, clientY) {
     reportPointerRegion(false);
     return;
   }
-  if (pointerState?.moved) {
+  if (pointerState) {
     reportPointerRegion(true);
     return;
   }
@@ -721,7 +845,10 @@ function updatePointerPosition(clientX, clientY) {
     state.mode === "daily" || state.mode === "hover"
       ? manifest.rules.hoverTolerance
       : 0;
-  const overPet = hitTest(clientX, clientY, tolerance);
+  const overPet =
+    hitTest(clientX, clientY, tolerance) ||
+    (state.mode === "hover" &&
+      hitTestHoverAnchor(clientX, clientY, tolerance));
   reportPointerRegion(overPet);
 
   if (state.mode === "daily" && overPet) {
@@ -737,7 +864,15 @@ function updatePointerPosition(clientX, clientY) {
 }
 
 async function pollPointerPosition() {
-  if (pointerPollInFlight || !state) return;
+  if (
+    pointerPollInFlight ||
+    !state ||
+    (state.mode !== "daily" && state.mode !== "hover") ||
+    state.clickThrough ||
+    state.fullscreenPaused
+  ) {
+    return;
+  }
   pointerPollInFlight = true;
   try {
     const point = await window.desktopPet.getPointerPosition();
@@ -746,12 +881,24 @@ async function pollPointerPosition() {
       x: Number(point.clientX),
       y: Number(point.clientY),
     };
-    if (!pointerState) {
-      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y);
+    updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y);
+    pointerPollWarningShown = false;
+  } catch (error) {
+    if (!pointerPollWarningShown) {
+      pointerPollWarningShown = true;
+      console.warn("无法读取系统光标位置：", error);
     }
   } finally {
     pointerPollInFlight = false;
   }
+}
+
+function schedulePointerPoll() {
+  clearTimeout(pointerPollTimer);
+  pointerPollTimer = setTimeout(async () => {
+    await pollPointerPosition();
+    schedulePointerPoll();
+  }, POINTER_POLL_INTERVAL_MS);
 }
 
 window.addEventListener("mousemove", (event) => {
@@ -798,6 +945,20 @@ stage.addEventListener("pointermove", async (event) => {
   });
   if (result?.flipHorizontal) toggleFacing();
 });
+
+function cancelPointerInteraction() {
+  if (!pointerState) {
+    window.desktopPet.dragEnd();
+    return;
+  }
+  const pointerId = pointerState.id;
+  pointerState = null;
+  stage.classList.remove("dragging");
+  if (stage.hasPointerCapture(pointerId)) {
+    stage.releasePointerCapture(pointerId);
+  }
+  window.desktopPet.dragEnd();
+}
 
 function finishPointer(event) {
   if (!pointerState || pointerState.id !== event.pointerId) return;
@@ -871,8 +1032,13 @@ async function initialize() {
   stage.dataset.scale = String(state.userScale);
   setFacing(1);
   enterDaily();
-  setInterval(pollPointerPosition, POINTER_POLL_INTERVAL_MS);
+  schedulePointerPoll();
 }
+
+window.addEventListener("beforeunload", () => {
+  clearTimeout(pointerPollTimer);
+  clearTimeout(bubbleShapeReleaseTimer);
+});
 
 initialize().catch((error) => {
   console.error("糖猫桌宠初始化失败：", error);
