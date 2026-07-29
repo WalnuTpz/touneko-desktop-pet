@@ -338,7 +338,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "schemaVersion": 2,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "rules": {
-            "dailyDelayMs": {"min": 25_000, "max": 35_000},
+            "dailyDelayMs": {"min": 20_000, "max": 30_000},
             "staticDurationMs": {"min": 2_000, "max": 4_000},
             "movementDurationMs": {"min": 3_000, "max": 6_000},
             "automaticActionProbability": 0.66,
