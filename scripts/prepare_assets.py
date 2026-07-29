@@ -23,8 +23,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 LOCAL_ROOT = ASSETS_ROOT / "local"
 COLLECTION_ROOT = LOCAL_ROOT / "糖猫合集"
-DAILY_ROOT = LOCAL_ROOT / "日常与悬停"
-DRAG_ASSET_PATH = DAILY_ROOT / "倒立.png"
+INTERACTION_ROOT = LOCAL_ROOT / "日常与悬停拖拽"
+DRAG_ASSET_PATH = INTERACTION_ROOT / "倒立.png"
 GENERATED_ROOT = ASSETS_ROOT / "generated"
 STAGING_ROOT = ASSETS_ROOT / "generated-staging"
 OVERRIDES_PATH = PROJECT_ROOT / "scripts" / "asset-overrides.json"
@@ -250,7 +250,7 @@ class AssetBuilder:
 
 def build_daily_pairs(builder: AssetBuilder) -> tuple[list[dict[str, Any]], set[str]]:
     numbered: dict[int, list[Path]] = {}
-    for path in image_files(DAILY_ROOT):
+    for path in image_files(INTERACTION_ROOT):
         prefix, separator, _rest = path.name.partition("_")
         if not separator or not prefix.isdigit():
             continue
@@ -283,14 +283,18 @@ def build_daily_pairs(builder: AssetBuilder) -> tuple[list[dict[str, Any]], set[
 
 
 def build_manifest(output_root: Path) -> dict[str, Any]:
-    if not COLLECTION_ROOT.is_dir() or not DAILY_ROOT.is_dir():
+    if not COLLECTION_ROOT.is_dir() or not INTERACTION_ROOT.is_dir():
         raise FileNotFoundError(
-            "缺少本地素材目录，请准备 assets/local/糖猫合集 和 assets/local/日常与悬停"
+            "缺少本地素材目录，请准备 assets/local/糖猫合集 和 "
+            "assets/local/日常与悬停拖拽"
         )
 
     overrides = load_overrides()
     builder = AssetBuilder(output_root, overrides)
     daily_pairs, daily_asset_ids = build_daily_pairs(builder)
+    interaction_asset_ids = {
+        builder.register(path) for path in image_files(INTERACTION_ROOT)
+    }
 
     if not DRAG_ASSET_PATH.is_file():
         raise FileNotFoundError(f"缺少拖拽素材：{DRAG_ASSET_PATH}")
@@ -315,7 +319,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
     collection_asset_ids = [builder.register(path) for path in collection_files]
     action_ids: list[str] = []
     seen_action_ids: set[str] = set()
-    excluded_ids = daily_asset_ids | movement_asset_ids | {drag_asset_id}
+    excluded_ids = interaction_asset_ids | movement_asset_ids
     for asset_id in collection_asset_ids:
         if asset_id in excluded_ids or asset_id in seen_action_ids:
             continue
@@ -371,7 +375,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "assets": builder.assets,
         "statistics": {
             "collectionFiles": len(collection_files),
-            "dailyFiles": len(image_files(DAILY_ROOT)),
+            "dailyFiles": len(image_files(INTERACTION_ROOT)),
             "dailyPairs": len(daily_pairs),
             "actions": len(action_ids),
             "staticActions": len(static_action_ids),
