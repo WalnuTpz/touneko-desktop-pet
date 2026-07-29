@@ -590,6 +590,22 @@ async function runSmokeTest() {
   if (dailyState.mode !== "daily" || !dailyState.assetId) {
     throw new Error(`初始日常状态无效：${JSON.stringify(dailyState)}`);
   }
+  petWindow.webContents.sendInputEvent({
+    type: "mouseMove",
+    x: Math.round(currentLayout.x + currentLayout.width / 2),
+    y: Math.round(currentLayout.y + currentLayout.height / 2),
+  });
+  await delay(100);
+  const hoverState = await rendererSmokeState();
+  if (hoverState.mode !== "hover") {
+    throw new Error(`日常悬停状态无效：${JSON.stringify(hoverState)}`);
+  }
+  petWindow.webContents.sendInputEvent({ type: "mouseMove", x: 1, y: 1 });
+  await delay(manifest.rules.hoverLeaveDelayMs + 80);
+  const leaveHoverState = await rendererSmokeState();
+  if (leaveHoverState.mode !== "daily") {
+    throw new Error(`悬停恢复状态无效：${JSON.stringify(leaveHoverState)}`);
+  }
   await captureSmokePage("01-daily.png");
   sendCommand("random-action", { interrupt: true });
   await delay(350);
