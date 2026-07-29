@@ -139,6 +139,18 @@ for (const [source, kind] of newlyAddedActions) {
   );
 }
 
+const maimaiCat = assetBySource("assets/local/糖猫合集/舞萌猫.png");
+const bird = assetBySource("assets/local/糖猫合集/鸟.png");
+assert.ok(maimaiCat && bird);
+assert.ok(
+  maimaiCat.displaySize.width <= 165 && maimaiCat.displaySize.height <= 165,
+  "舞萌猫裁减空白后不应保留过大的运行画布",
+);
+assert.ok(
+  bird.displaySize.height >= 185 && bird.displaySize.height <= 195,
+  "鸟素材应适当放大，避免棚架和长喙使主体显得过小",
+);
+
 function dailyPairById(id) {
   return manifest.daily.find((pair) => pair.id === id);
 }
