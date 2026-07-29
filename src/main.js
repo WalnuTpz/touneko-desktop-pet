@@ -773,35 +773,37 @@ async function runSmokeTest() {
   if (dailyState.mode !== "daily" || !dailyState.assetId) {
     throw new Error(`初始日常状态无效：${JSON.stringify(dailyState)}`);
   }
-  const dragState = await petWindow.webContents.executeJavaScript(
-    `(async () => {
-      const before = {
-        mode: state.mode,
-        assetId: state.currentAssetId,
-        remainingMs: state.dailyTimer.remaining()
-      };
-      beginDragVisual();
-      await new Promise((resolve) => setTimeout(resolve, 180));
-      const during = {
-        mode: state.mode,
-        assetId: state.currentAssetId,
-        remainingMs: state.dailyTimer.remaining()
-      };
-      endDragVisual();
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      return {
-        before,
-        during,
-        after: {
-          mode: state.mode,
-          assetId: state.currentAssetId,
-          remainingMs: state.dailyTimer.remaining()
-        },
-        expectedDragAsset: manifest.dragAsset
-      };
-    })`,
+  const dragBefore = await rendererSmokeState();
+  await petWindow.webContents.executeJavaScript(
+    `beginDragVisual(); "drag-started"`,
     true,
   );
+  await delay(180);
+  const dragDuring = await rendererSmokeState();
+  await petWindow.webContents.executeJavaScript(
+    `endDragVisual(); "drag-ended"`,
+    true,
+  );
+  await delay(60);
+  const dragAfter = await rendererSmokeState();
+  const dragState = {
+    before: {
+      mode: dragBefore.mode,
+      assetId: dragBefore.assetId,
+      remainingMs: dragBefore.dailyRemainingMs,
+    },
+    during: {
+      mode: dragDuring.mode,
+      assetId: dragDuring.assetId,
+      remainingMs: dragDuring.dailyRemainingMs,
+    },
+    after: {
+      mode: dragAfter.mode,
+      assetId: dragAfter.assetId,
+      remainingMs: dragAfter.dailyRemainingMs,
+    },
+    expectedDragAsset: manifest.dragAsset,
+  };
   if (
     dragState.during.mode !== "dragging" ||
     dragState.during.assetId !== dragState.expectedDragAsset ||
