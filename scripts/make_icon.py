@@ -4,7 +4,7 @@ from PIL import Image
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SOURCE = PROJECT_ROOT / "糖猫合集" / "站.png"
+SOURCE = PROJECT_ROOT / "assets" / "local" / "糖猫合集" / "站.png"
 OUTPUT = PROJECT_ROOT / "build" / "icon.ico"
 
 

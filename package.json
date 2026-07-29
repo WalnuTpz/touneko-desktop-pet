@@ -28,7 +28,7 @@
     "asar": true,
     "files": [
       "src/**/*",
-      "糖猫合集/**/*",
+      "assets/local/糖猫合集/**/*",
       "package.json"
     ],
     "directories": {

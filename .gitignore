@@ -11,6 +11,6 @@ release/
 out/
 *.exe
 
-# Local pet assets are intentionally not published
-糖猫合集/
-日常与悬停/
+# Local pet assets and generated copies are intentionally not published
+assets/local/
+assets/generated/

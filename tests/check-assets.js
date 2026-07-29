@@ -2,7 +2,13 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const rendererPath = path.join(__dirname, "..", "src", "renderer.js");
-const assetRoot = path.join(__dirname, "..", "糖猫合集");
+const assetRoot = path.join(
+  __dirname,
+  "..",
+  "assets",
+  "local",
+  "糖猫合集",
+);
 const source = fs.readFileSync(rendererPath, "utf8");
 const references = [
   ...new Set([...source.matchAll(/"([^"]+\.(?:png|gif))"/g)].map((match) => match[1])),

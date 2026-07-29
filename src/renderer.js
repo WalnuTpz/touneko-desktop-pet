@@ -2,7 +2,7 @@ const stage = document.querySelector("#pet-stage");
 const petImage = document.querySelector("#pet-image");
 const speechBubble = document.querySelector("#speech-bubble");
 
-const ASSET_ROOT = new URL("../糖猫合集/", window.location.href);
+const ASSET_ROOT = new URL("../assets/local/糖猫合集/", window.location.href);
 const DEFAULT_ACTION = { file: "站.png", duration: 0 };
 
 const ACTIONS = [
