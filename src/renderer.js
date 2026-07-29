@@ -9,7 +9,10 @@ const {
   pushRecent,
   randomBetween,
 } = window.PetCore;
-const { dialogueForAsset } = window.PetDialogue;
+const {
+  dialogueForAsset,
+  shouldShowActionBubble,
+} = window.PetDialogue;
 
 const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
 const DOUBLE_CLICK_DELAY_MS = 280;
@@ -459,7 +462,8 @@ function hideBubble(immediate = false) {
   bubbleShapeReleaseTimer = setTimeout(releaseBubbleShape, 170);
 }
 
-function showActionBubble(asset, actionDurationMs) {
+function showActionBubble(asset, actionDurationMs, force = false) {
+  if (!force && !shouldShowActionBubble()) return;
   const message = dialogueForAsset(asset.name);
   if (!message) return;
   clearTimeout(bubbleShapeReleaseTimer);
@@ -580,7 +584,11 @@ function startAction(assetId, trigger = "automatic") {
     setMode("action-gif");
     const loops = chooseGifLoopCount(asset.loopDurationMs);
     state.gifPlayer.start(assetId, loops, finishAction);
-    showActionBubble(asset, asset.loopDurationMs * loops);
+    showActionBubble(
+      asset,
+      asset.loopDurationMs * loops,
+      trigger === "smoke-manual",
+    );
     if (state.fullscreenPaused) state.gifPlayer.pause();
   } else {
     setMode("action-static");
@@ -590,7 +598,7 @@ function startAction(assetId, trigger = "automatic") {
       manifest.rules.staticDurationMs.max,
     );
     state.actionTimer.start(duration);
-    showActionBubble(asset, duration);
+    showActionBubble(asset, duration, trigger === "smoke-manual");
     if (state.fullscreenPaused) state.actionTimer.pause();
   }
 }
