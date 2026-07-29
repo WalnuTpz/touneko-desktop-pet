@@ -38,6 +38,7 @@ let manifest = null;
 let fullscreenProcess = null;
 let fullscreenOutput = "";
 let activeFullscreenDisplayId = null;
+let fullscreenSamples = 0;
 
 function generatedPath(...parts) {
   return path.join(__dirname, "..", "assets", "generated", ...parts);
@@ -340,6 +341,7 @@ function parseFullscreenLine(line) {
   if (!line.trim()) return;
   try {
     const state = JSON.parse(line);
+    fullscreenSamples += 1;
     if (!state.fullscreen || Number(state.processId) === process.pid) {
       activeFullscreenDisplayId = null;
     } else {
@@ -459,19 +461,13 @@ function registerIpc() {
     },
   }));
 
-  ipcMain.on("pet:renderer-ready", async () => {
+  ipcMain.on("pet:renderer-ready", () => {
     if (app.commandLine.hasSwitch("smoke-test")) {
-      setTimeout(async () => {
-        try {
-          const image = await petWindow.webContents.capturePage();
-          const output = path.join(__dirname, "..", "build", "smoke-test.png");
-          fs.mkdirSync(path.dirname(output), { recursive: true });
-          fs.writeFileSync(output, image.toPNG());
-        } catch (error) {
-          console.error("保存冒烟测试截图失败：", error);
-        }
+      runSmokeTest().catch((error) => {
+        console.error("冒烟测试失败：", error);
+        process.exitCode = 1;
         quitApplication();
-      }, 800);
+      });
     }
   });
 
@@ -564,6 +560,71 @@ function registerIpc() {
     if (!petWindow || runtime.clickThrough) return;
     createPetMenu({ includeActions: true }).popup({ window: petWindow });
   });
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function captureSmokePage(filename) {
+  const image = await petWindow.webContents.capturePage();
+  const output = path.join(__dirname, "..", "build", "smoke-test", filename);
+  fs.mkdirSync(path.dirname(output), { recursive: true });
+  fs.writeFileSync(output, image.toPNG());
+}
+
+async function rendererSmokeState() {
+  return petWindow.webContents.executeJavaScript(
+    `({
+      mode: document.querySelector("#pet-stage")?.dataset.mode,
+      scale: Number(document.querySelector("#pet-stage")?.dataset.scale),
+      assetId: document.querySelector("#pet-image")?.dataset.assetId
+    })`,
+    true,
+  );
+}
+
+async function runSmokeTest() {
+  await delay(300);
+  const dailyState = await rendererSmokeState();
+  if (dailyState.mode !== "daily" || !dailyState.assetId) {
+    throw new Error(`初始日常状态无效：${JSON.stringify(dailyState)}`);
+  }
+  await captureSmokePage("01-daily.png");
+  sendCommand("random-action", { interrupt: true });
+  await delay(350);
+  const actionState = await rendererSmokeState();
+  if (!String(actionState.mode).startsWith("action-")) {
+    throw new Error(`随机动作状态无效：${JSON.stringify(actionState)}`);
+  }
+  await captureSmokePage("02-action.png");
+  const positionBeforeMovement = petWindow.getPosition();
+  sendCommand("random-movement", { interrupt: true });
+  await delay(550);
+  const movementState = await rendererSmokeState();
+  if (movementState.mode !== "movement") {
+    throw new Error(`随机移动状态无效：${JSON.stringify(movementState)}`);
+  }
+  const positionAfterMovement = petWindow.getPosition();
+  if (
+    positionBeforeMovement[0] === positionAfterMovement[0] &&
+    positionBeforeMovement[1] === positionAfterMovement[1]
+  ) {
+    throw new Error("随机移动没有改变窗口位置");
+  }
+  await captureSmokePage("03-movement.png");
+  setScale(1.5);
+  await delay(250);
+  const scaleState = await rendererSmokeState();
+  if (scaleState.scale !== 1.5) {
+    throw new Error(`缩放状态无效：${JSON.stringify(scaleState)}`);
+  }
+  await captureSmokePage("04-scale-150.png");
+  if (process.platform === "win32" && fullscreenSamples < 1) {
+    throw new Error("没有收到全屏监测进程的有效状态");
+  }
+  console.log("第二版 Electron 冒烟测试通过");
+  quitApplication();
 }
 
 function createWindow() {

@@ -41,6 +41,11 @@ function currentFrame() {
   return asset?.frames[state.currentFrameIndex] || null;
 }
 
+function setMode(mode) {
+  state.mode = mode;
+  stage.dataset.mode = mode;
+}
+
 function reportPointerRegion(overPet) {
   const next = Boolean(overPet) && !state?.clickThrough;
   if (lastPointerRegion === next) return;
@@ -123,6 +128,8 @@ function renderFrame(assetId, frameIndex = 0) {
   const nextSource = assetUrl(frame.file);
   state.currentAssetId = assetId;
   state.currentFrameIndex = normalizedIndex;
+  petImage.dataset.assetId = assetId;
+  petImage.dataset.frameIndex = String(normalizedIndex);
   imageLoaded = petImage.src === nextSource && petImage.complete;
   if (petImage.src !== nextSource) {
     petImage.src = nextSource;
@@ -317,7 +324,7 @@ function pickAction(trigger) {
 
 function enterDaily() {
   stopCurrent();
-  state.mode = "daily";
+  setMode("daily");
   state.currentDaily = pickUniform(manifest.daily);
   state.currentHoverId = null;
   renderFrame(state.currentDaily.idle, 0);
@@ -335,7 +342,7 @@ function enterHover() {
   if (state.mode !== "daily" || !state.currentDaily) return;
   state.dailyTimer.pause();
   state.hoverLeaveTimer.cancel();
-  state.mode = "hover";
+  setMode("hover");
   state.currentHoverId = pickUniform(state.currentDaily.hovers);
   renderFrame(state.currentHoverId, 0);
 }
@@ -343,7 +350,7 @@ function enterHover() {
 function leaveHover() {
   if (state.mode !== "hover" || !state.currentDaily) return;
   state.hoverLeaveTimer.cancel();
-  state.mode = "daily";
+  setMode("daily");
   state.currentHoverId = null;
   renderFrame(state.currentDaily.idle, 0);
   if (!state.manualPaused && !state.fullscreenPaused) {
@@ -370,12 +377,12 @@ function startAction(assetId) {
   rememberAsset(assetId);
   const asset = assets[assetId];
   if (asset.kind === "gif") {
-    state.mode = "action-gif";
+    setMode("action-gif");
     const loops = chooseGifLoopCount(asset.loopDurationMs);
     state.gifPlayer.start(assetId, loops, finishAction);
     if (state.fullscreenPaused) state.gifPlayer.pause();
   } else {
-    state.mode = "action-static";
+    setMode("action-static");
     renderFrame(assetId, 0);
     state.actionTimer.start(
       randomBetween(
@@ -476,7 +483,7 @@ function startRandomMovement() {
 
   stopCurrent();
   rememberAsset(selected.asset);
-  state.mode = "movement";
+  setMode("movement");
   renderFrame(selected.asset, 0);
   const movement = {
     name: selected.name,
@@ -555,12 +562,13 @@ function setUserScale(value) {
   const scale = Number(value);
   if (!manifest.rules.scaleOptions.includes(scale)) return;
   state.userScale = scale;
+  stage.dataset.scale = String(scale);
   updateGeometry();
 }
 
 function hideRuntime() {
   stopCurrent({ clearPending: true });
-  state.mode = "hidden";
+  setMode("hidden");
   state.currentDaily = null;
   state.currentHoverId = null;
   reportPointerRegion(false);
@@ -752,6 +760,7 @@ async function initialize() {
   state.actionTimer = new PausableTimer(finishAction);
   state.hoverLeaveTimer = new PausableTimer(leaveHover);
   window.desktopPet.onCommand(handleCommand);
+  stage.dataset.scale = String(state.userScale);
   setFacing(1);
   enterDaily();
 }
