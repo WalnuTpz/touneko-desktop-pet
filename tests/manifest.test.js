@@ -12,9 +12,9 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
 
 assert.equal(manifest.schemaVersion, 2);
 assert.equal(manifest.daily.length, 5);
-assert.equal(manifest.actions.length, 121);
-assert.equal(manifest.staticActions.length, 101);
-assert.equal(manifest.gifActions.length, 20);
+assert.equal(manifest.actions.length, 130);
+assert.equal(manifest.staticActions.length, 109);
+assert.equal(manifest.gifActions.length, 21);
 assert.deepEqual(Object.keys(manifest.movement).sort(), ["迈步", "跑", "跳", "飞猫"].sort());
 assert.deepEqual(manifest.rules.dailyDelayMs, { min: 20_000, max: 30_000 });
 assert.deepEqual(manifest.rules.staticDurationMs, { min: 2_000, max: 4_000 });
@@ -139,6 +139,33 @@ for (const [source, kind] of newlyAddedActions) {
   );
 }
 
+const latestV2Actions = [
+  ["assets/local/糖猫合集/擦干眼泪.png", "static"],
+  ["assets/local/糖猫合集/擦眼泪.png", "static"],
+  ["assets/local/糖猫合集/揣手.png", "static"],
+  ["assets/local/糖猫合集/寄了.png", "static"],
+  ["assets/local/糖猫合集/凌乱1.png", "static"],
+  ["assets/local/糖猫合集/凌乱2.png", "static"],
+  ["assets/local/糖猫合集/趴5.png", "static"],
+  ["assets/local/糖猫合集/穷.png", "static"],
+  ["assets/local/糖猫合集/照相.png", "static"],
+  ["assets/local/糖猫合集/动图/趴下起来.gif", "gif"],
+];
+for (const [source, kind] of latestV2Actions) {
+  const asset = assetBySource(source);
+  assert.ok(asset, `未导入第二版补充素材：${source}`);
+  assert.equal(asset.kind, kind, `第二版补充素材类型错误：${source}`);
+  assert.ok(
+    manifest.actions.includes(asset.id),
+    `第二版补充素材未进入普通动作池：${source}`,
+  );
+}
+assert.equal(
+  assetBySource("assets/local/糖猫合集/呆住.png"),
+  undefined,
+  "呆住.png 已原样更名为穷.png，不应保留旧来源",
+);
+
 const maimaiCat = assetBySource("assets/local/糖猫合集/舞萌猫.png");
 const bird = assetBySource("assets/local/糖猫合集/鸟.png");
 assert.ok(maimaiCat && bird);
@@ -150,6 +177,26 @@ assert.ok(
   bird.displaySize.height >= 185 && bird.displaySize.height <= 195,
   "鸟素材应适当放大，避免棚架和长喙使主体显得过小",
 );
+
+const proneFive = assetBySource("assets/local/糖猫合集/趴5.png");
+const lieDownAndRise = assetBySource(
+  "assets/local/糖猫合集/动图/趴下起来.gif",
+);
+assert.ok(proneFive && lieDownAndRise);
+const proneFiveHeight =
+  proneFive.frames[proneFive.representativeFrame].bounds.height *
+  proneFive.displayScale;
+assert.ok(
+  proneFiveHeight >= 120 && proneFiveHeight <= 130,
+  "趴5.png 应与既有趴姿组大小接近",
+);
+for (const frame of lieDownAndRise.frames) {
+  const frameHeight = frame.bounds.height * lieDownAndRise.displayScale;
+  assert.ok(
+    frameHeight >= 110 && frameHeight <= 130,
+    "趴下起来.gif 的每一帧都应与既有趴姿组大小接近",
+  );
+}
 
 function dailyPairById(id) {
   return manifest.daily.find((pair) => pair.id === id);

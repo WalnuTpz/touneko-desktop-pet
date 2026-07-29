@@ -55,6 +55,26 @@ for (const message of OPENING_DIALOGUE) {
   assert.ok(message.length >= 12 && message.length <= 24);
 }
 
+const latestV2Themes = [
+  "擦干眼泪",
+  "揣手",
+  "趴下起来",
+  "寄了",
+  "凌乱1",
+  "凌乱2",
+  "趴5",
+  "穷",
+  "照相",
+];
+for (const theme of latestV2Themes) {
+  assert.equal(
+    ACTION_DIALOGUE[theme]?.length,
+    4,
+    `第二版补充主题应有四条气泡文案：${theme}`,
+  );
+}
+assert.equal(ACTION_DIALOGUE.呆住, undefined, "更名后的呆住主题不应继续保留");
+
 for (const [name, messages] of Object.entries(ACTION_DIALOGUE)) {
   assert.equal(messages.length, 4, `主题应有四条气泡文案：${name}`);
   assert.equal(
