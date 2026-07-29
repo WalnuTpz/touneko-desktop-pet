@@ -22,6 +22,7 @@ let pointerState = null;
 let suppressClickUntil = 0;
 let clickTimer = null;
 let lastPointerRegion = null;
+let lastPointerPosition = null;
 let imageLoaded = false;
 let readyReported = false;
 
@@ -144,6 +145,11 @@ petImage.addEventListener("load", () => {
   if (!readyReported) {
     readyReported = true;
     window.desktopPet.reportReady();
+  }
+  if (lastPointerPosition && !pointerState) {
+    queueMicrotask(() =>
+      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y),
+    );
   }
 });
 
@@ -624,7 +630,7 @@ function handleCommand(payload) {
   }
 }
 
-function updatePointerFromMouse(event) {
+function updatePointerPosition(clientX, clientY) {
   if (!state || state.mode === "hidden" || state.clickThrough) {
     reportPointerRegion(false);
     return;
@@ -637,7 +643,7 @@ function updatePointerFromMouse(event) {
     state.mode === "daily" || state.mode === "hover"
       ? manifest.rules.hoverTolerance
       : 0;
-  const overPet = hitTest(event.clientX, event.clientY, tolerance);
+  const overPet = hitTest(clientX, clientY, tolerance);
   reportPointerRegion(overPet);
 
   if (state.mode === "daily" && overPet) {
@@ -652,8 +658,12 @@ function updatePointerFromMouse(event) {
   }
 }
 
-window.addEventListener("mousemove", updatePointerFromMouse);
+window.addEventListener("mousemove", (event) => {
+  lastPointerPosition = { x: event.clientX, y: event.clientY };
+  updatePointerPosition(event.clientX, event.clientY);
+});
 window.addEventListener("mouseleave", () => {
+  lastPointerPosition = null;
   if (!pointerState) reportPointerRegion(false);
   if (state?.mode === "hover" && !state.hoverLeaveTimer.isActive()) {
     state.hoverLeaveTimer.start(manifest.rules.hoverLeaveDelayMs);
