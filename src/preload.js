@@ -6,6 +6,7 @@ contextBridge.exposeInMainWorld("desktopPet", {
   updateLayout: (rect) => ipcRenderer.send("pet:update-layout", rect),
   setPointerRegion: (overPet) =>
     ipcRenderer.send("pet:set-pointer-region", Boolean(overPet)),
+  getPointerPosition: () => ipcRenderer.invoke("pet:get-pointer-position"),
   dragStart: (point) => ipcRenderer.send("pet:drag-start", point),
   dragMove: (point) => ipcRenderer.invoke("pet:drag-move", point),
   dragEnd: () => ipcRenderer.send("pet:drag-end"),
