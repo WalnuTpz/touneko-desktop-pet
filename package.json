@@ -15,36 +15,60 @@
     "start": "electron .",
     "dev": "electron .",
     "start:smoke": "electron . --smoke-test",
-    "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/dialogue.js && node --check src/renderer.js && node --check scripts/render_dialogue_doc.js",
+    "check": "node --check src/main.js && node --check src/preload.js && node --check src/core.js && node --check src/dialogue.js && node --check src/renderer.js && node --check src/secure-resources.js && node --check scripts/render_dialogue_doc.js && node --check scripts/build_secure_runtime.js && node --check scripts/verify_secure_package.js && node --check scripts/smoke_portable.js",
     "check:assets": "python scripts/prepare_assets.py --check",
-    "test": "npm run prepare:assets && node tests/core.test.js && node tests/dialogue.test.js && node tests/manifest.test.js",
+    "test": "npm run prepare:assets && node tests/core.test.js && node tests/dialogue.test.js && node tests/manifest.test.js && node tests/secure-resources.test.js",
     "catalog:assets": "python scripts/render_asset_catalog.py",
     "docs:dialogue": "node scripts/render_dialogue_doc.js",
     "icon": "python scripts/make_icon.py",
-    "pack": "electron-builder --dir",
-    "predist": "npm run prepare:assets",
-    "dist": "npm run icon && electron-builder --win portable"
+    "secure:prepare": "node scripts/build_secure_runtime.js",
+    "verify:secure": "node scripts/verify_secure_package.js",
+    "smoke:portable": "node scripts/smoke_portable.js",
+    "pack": "npm run check && npm test && npm run secure:prepare && npm run icon && electron-builder --dir && npm run verify:secure",
+    "predist": "npm run check && npm test",
+    "dist": "npm run secure:prepare && npm run icon && electron-builder --win portable && npm run verify:secure -- --require-portable && npm run smoke:portable"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
+    "@electron/fuses": "^1.8.0",
     "electron": "43.2.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "esbuild": "^0.28.1",
+    "javascript-obfuscator": "^5.5.0"
   },
   "build": {
     "appId": "com.walnut.tangmao",
     "productName": "糖猫桌宠",
     "asar": true,
     "files": [
-      "src/**/*",
-      "assets/generated/**/*",
-      "scripts/fullscreen-monitor.ps1",
+      {
+        "from": "build/secure-runtime",
+        "to": ".",
+        "filter": [
+          "src/main.js",
+          "src/preload.js",
+          "assets/runtime.tpack"
+        ]
+      },
       "package.json"
     ],
-    "asarUnpack": [
-      "scripts/fullscreen-monitor.ps1"
+    "extraResources": [
+      {
+        "from": "build/secure-runtime/scripts/fullscreen-monitor.ps1",
+        "to": "fullscreen-monitor.ps1"
+      }
     ],
     "directories": {
       "buildResources": "build",
       "output": "release"
+    },
+    "electronFuses": {
+      "runAsNode": false,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true,
+      "grantFileProtocolExtraPrivileges": false
     },
     "win": {
       "icon": "build/icon.ico",

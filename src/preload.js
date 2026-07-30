@@ -3,6 +3,8 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("desktopPet", {
   getBootstrap: () => ipcRenderer.invoke("pet:get-bootstrap"),
   reportReady: () => ipcRenderer.send("pet:renderer-ready"),
+  reportFailure: (message) =>
+    ipcRenderer.send("pet:renderer-failed", String(message || "未知错误")),
   updateLayout: (rect) => ipcRenderer.send("pet:update-layout", rect),
   setPointerRegion: (overPet) =>
     ipcRenderer.send("pet:set-pointer-region", Boolean(overPet)),
