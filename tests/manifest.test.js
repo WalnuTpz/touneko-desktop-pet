@@ -117,6 +117,14 @@ function assetBySource(source) {
   );
 }
 
+function representativeVisibleSize(asset) {
+  const bounds = asset.frames[asset.representativeFrame].bounds;
+  return {
+    width: bounds.width * asset.displayScale,
+    height: bounds.height * asset.displayScale,
+  };
+}
+
 const newlyAddedActions = [
   ["assets/local/糖猫合集/nb.png", "static"],
   ["assets/local/糖猫合集/qu.png", "static"],
@@ -166,9 +174,31 @@ assert.equal(
   "呆住.png 已原样更名为穷.png，不应保留旧来源",
 );
 
+const renamedSittingSources = [
+  "assets/local/糖猫合集/坐1.png",
+  "assets/local/糖猫合集/坐2.png",
+  "assets/local/糖猫合集/坐3.png",
+  "assets/local/糖猫合集/坐4.png",
+];
+for (const source of renamedSittingSources) {
+  const asset = assetBySource(source);
+  assert.ok(asset, `未识别改名后的坐姿素材：${source}`);
+  assert.ok(
+    asset.sources.some((candidate) =>
+      candidate.startsWith("assets/local/日常与悬停拖拽/"),
+    ),
+    `改名后的坐姿素材应复用专用素材内容：${source}`,
+  );
+  assert.ok(
+    !manifest.actions.includes(asset.id),
+    `改名后的坐姿专用素材不得进入普通动作池：${source}`,
+  );
+}
+
 const maimaiCat = assetBySource("assets/local/糖猫合集/舞萌猫.png");
 const bird = assetBySource("assets/local/糖猫合集/鸟.png");
-assert.ok(maimaiCat && bird);
+const goose = assetBySource("assets/local/糖猫合集/鹅.png");
+assert.ok(maimaiCat && bird && goose);
 assert.ok(
   maimaiCat.displaySize.width <= 165 && maimaiCat.displaySize.height <= 165,
   "舞萌猫裁减空白后不应保留过大的运行画布",
@@ -177,6 +207,94 @@ assert.ok(
   bird.displaySize.height >= 185 && bird.displaySize.height <= 195,
   "鸟素材应适当放大，避免棚架和长喙使主体显得过小",
 );
+assert.ok(
+  goose.displaySize.height >= 185 && goose.displaySize.height <= 195,
+  "鹅素材应适当放大，避免细长身体使猫头显得过小",
+);
+
+const swallowingCats = [
+  assetBySource("assets/local/糖猫合集/吞1.png"),
+  assetBySource("assets/local/糖猫合集/吞2.png"),
+];
+assert.ok(swallowingCats.every(Boolean));
+for (const asset of swallowingCats) {
+  const bounds = asset.frames[asset.representativeFrame].bounds;
+  const visibleHeight = bounds.height * asset.displayScale;
+  assert.ok(
+    visibleHeight >= 135 && visibleHeight <= 140,
+    `${asset.name} 应稍微缩小并保持组内大小一致`,
+  );
+}
+
+const jumpingCats = [
+  assetBySource("assets/local/糖猫合集/跳跳.png"),
+  assetBySource("assets/local/糖猫合集/动图/跳跳.gif"),
+];
+assert.ok(jumpingCats.every(Boolean));
+for (const asset of jumpingCats) {
+  const bounds = asset.frames[asset.representativeFrame].bounds;
+  const visibleHeight = bounds.height * asset.displayScale;
+  assert.ok(
+    visibleHeight >= 165 && visibleHeight <= 170,
+    `${asset.name} 的静态图与 GIF 应同步稍微放大`,
+  );
+}
+
+const crawlingCat = assetBySource(
+  "assets/local/糖猫合集/动图/蛆爬行.gif",
+);
+assert.ok(crawlingCat);
+const crawlingBounds =
+  crawlingCat.frames[crawlingCat.representativeFrame].bounds;
+const crawlingHeight = crawlingBounds.height * crawlingCat.displayScale;
+assert.ok(
+  crawlingHeight >= 120 && crawlingHeight <= 125,
+  "蛆爬行.gif 应进一步缩小，减少横向画面的占用",
+);
+
+const enlargedSlenderAssets = [
+  ["assets/local/糖猫合集/喂.png", 185, 195],
+  ["assets/local/糖猫合集/惊.png", 170, 180],
+  ["assets/local/糖猫合集/偷听.png", 165, 175],
+  ["assets/local/糖猫合集/彩虹吐.png", 170, 180],
+  ["assets/local/糖猫合集/灵魂.png", 180, 185],
+  ["assets/local/糖猫合集/单脚站.png", 165, 170],
+  ["assets/local/糖猫合集/动图/吐.gif", 170, 180],
+];
+for (const [source, minimumHeight, maximumHeight] of enlargedSlenderAssets) {
+  const asset = assetBySource(source);
+  assert.ok(asset, `未找到细长构图尺寸复核素材：${source}`);
+  const { height } = representativeVisibleSize(asset);
+  assert.ok(
+    height >= minimumHeight && height <= maximumHeight,
+    `${asset.name} 应补偿长尾、长杆或特效占高造成的主体偏小`,
+  );
+}
+
+const reducedWideAssets = [
+  ["assets/local/糖猫合集/买买买.png", 255, 265, 128, 135],
+  ["assets/local/糖猫合集/收废品.png", 255, 265, 128, 135],
+  ["assets/local/糖猫合集/爱你.png", 238, 247, 134, 140],
+  ["assets/local/糖猫合集/骑鳄鱼.png", 280, 292, 168, 174],
+];
+for (const [
+  source,
+  minimumWidth,
+  maximumWidth,
+  minimumHeight,
+  maximumHeight,
+] of reducedWideAssets) {
+  const asset = assetBySource(source);
+  assert.ok(asset, `未找到横向构图尺寸复核素材：${source}`);
+  const { width, height } = representativeVisibleSize(asset);
+  assert.ok(
+    width >= minimumWidth &&
+      width <= maximumWidth &&
+      height >= minimumHeight &&
+      height <= maximumHeight,
+    `${asset.name} 应温和缩小，避免实体画面明显大于普通动作`,
+  );
+}
 
 const proneFive = assetBySource("assets/local/糖猫合集/趴5.png");
 const lieDownAndRise = assetBySource(
@@ -237,6 +355,26 @@ assert.ok(
     workIdle.displayScale <
     0.05,
   "带高处问号的工作悬停图应按猫主体而非总高度匹配日常图",
+);
+
+const bedtimeIdle = assetBySource(
+  "assets/local/日常与悬停拖拽/7_晚安.png",
+);
+const bedtimeHovers = [
+  assetBySource("assets/local/日常与悬停拖拽/8_起床.png"),
+  assetBySource("assets/local/日常与悬停拖拽/8_睡不着.png"),
+];
+assert.ok(bedtimeIdle && bedtimeHovers.every(Boolean));
+function representativeVisibleArea(asset) {
+  const bounds = asset.frames[asset.representativeFrame].bounds;
+  return bounds.width * bounds.height * asset.displayScale ** 2;
+}
+const largestBedtimeHoverArea = Math.max(
+  ...bedtimeHovers.map(representativeVisibleArea),
+);
+assert.ok(
+  representativeVisibleArea(bedtimeIdle) <= largestBedtimeHoverArea * 1.08,
+  "7_晚安.png 应略微缩小，与对应悬停图的视觉面积接近",
 );
 
 console.log("manifest.test.js 通过");
