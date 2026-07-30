@@ -5,18 +5,42 @@ const {
   Menu,
   Tray,
   nativeImage,
+  protocol,
   screen,
+  session,
 } = require("electron");
 const { spawn } = require("node:child_process");
+const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { StableValueTracker } = require("./core");
+const {
+  normalizeResourcePath,
+  openEncryptedPack,
+} = require("./secure-resources");
 
 const WINDOW_WIDTH = 960;
 const WINDOW_HEIGHT = 900;
 const EDGE_MARGIN_X = 14;
 const EDGE_MARGIN_Y = 10;
 const SCALE_OPTIONS = [0.75, 1, 1.25, 1.5];
+const RESOURCE_SCHEME = "tangmao-resource";
+const RESOURCE_HOST = "app";
+const RESOURCE_KEY_SYMBOL = Symbol.for("tangmao.resource-key");
+const FULLSCREEN_HASH_SYMBOL = Symbol.for("tangmao.fullscreen-monitor-hash");
+const PET_SESSION_PARTITION = "tangmao-memory";
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: RESOURCE_SCHEME,
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: false,
+    },
+  },
+]);
 
 const runtime = {
   paused: false,
@@ -42,6 +66,10 @@ let fullscreenRestartTimer = null;
 let fullscreenOutput = "";
 let activeFullscreenDisplayIds = new Set();
 let fullscreenSamples = 0;
+let protectedResources = null;
+let petSession = null;
+let fullscreenMonitorExpectedHash = null;
+let smokeReadyTimer = null;
 const fullscreenStability = new StableValueTracker("");
 
 function generatedPath(...parts) {
@@ -49,6 +77,35 @@ function generatedPath(...parts) {
 }
 
 function loadManifest() {
+  if (app.isPackaged) {
+    const embeddedKey = globalThis[RESOURCE_KEY_SYMBOL];
+    if (!embeddedKey) {
+      throw new Error("正式版本缺少加密资源密钥");
+    }
+    const key = Buffer.from(embeddedKey);
+    try {
+      const packPath = path.join(
+        __dirname,
+        "..",
+        "assets",
+        "runtime.tpack",
+      );
+      protectedResources = openEncryptedPack(fs.readFileSync(packPath), key);
+      manifest = JSON.parse(
+        protectedResources
+          .read("app/assets/manifest.json")
+          .toString("utf8"),
+      );
+    } catch (error) {
+      throw new Error(`无法验证或解密正式版资源：${error.message}`);
+    } finally {
+      key.fill(0);
+      if (Buffer.isBuffer(embeddedKey)) embeddedKey.fill(0);
+      delete globalThis[RESOURCE_KEY_SYMBOL];
+    }
+    return;
+  }
+
   const manifestPath = generatedPath("manifest.json");
   try {
     manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -57,6 +114,66 @@ function loadManifest() {
       `无法读取生成素材：${manifestPath}\n请先运行 npm run prepare:assets\n${error.message}`,
     );
   }
+}
+
+function readGeneratedResource(relativePath) {
+  const normalizedPath = normalizeResourcePath(relativePath);
+  if (protectedResources) {
+    return protectedResources.read(`app/assets/${normalizedPath}`);
+  }
+  return fs.readFileSync(generatedPath(...normalizedPath.split("/")));
+}
+
+function resourceContentType(resourcePath) {
+  const extension = path.extname(resourcePath).toLowerCase();
+  return (
+    {
+      ".css": "text/css; charset=utf-8",
+      ".html": "text/html; charset=utf-8",
+      ".js": "text/javascript; charset=utf-8",
+      ".json": "application/json; charset=utf-8",
+      ".png": "image/png",
+    }[extension] || "application/octet-stream"
+  );
+}
+
+function registerProtectedResourceProtocol() {
+  petSession = session.fromPartition(PET_SESSION_PARTITION, { cache: true });
+  if (!protectedResources) return;
+  petSession.protocol.handle(RESOURCE_SCHEME, (request) => {
+    try {
+      const url = new URL(request.url);
+      if (
+        request.method !== "GET" ||
+        url.hostname !== RESOURCE_HOST ||
+        url.username ||
+        url.password ||
+        url.port ||
+        url.search ||
+        url.hash
+      ) {
+        return new Response("Not found", { status: 404 });
+      }
+      const pathname = decodeURIComponent(url.pathname).replace(/^\/+/, "");
+      const resourcePath = normalizeResourcePath(
+        `${RESOURCE_HOST}/${pathname}`,
+      );
+      const data = protectedResources.read(resourcePath);
+      const immutable = /\.(?:css|js|png)$/i.test(resourcePath);
+      return new Response(data, {
+        headers: {
+          "Cache-Control": immutable
+            ? "public, max-age=31536000, immutable"
+            : "no-store",
+          "Content-Type": resourceContentType(resourcePath),
+          "Cross-Origin-Resource-Policy": "same-origin",
+          "X-Content-Type-Options": "nosniff",
+        },
+      });
+    } catch {
+      return new Response("Not found", { status: 404 });
+    }
+  });
 }
 
 function displayById(displayId) {
@@ -157,6 +274,15 @@ function positionBottomRight(display = currentDisplay()) {
 function sendCommand(command, payload = {}) {
   if (!petWindow || petWindow.isDestroyed()) return;
   petWindow.webContents.send("pet:command", { command, ...payload });
+}
+
+function failApplicationStartup(error) {
+  console.error("糖猫桌宠启动失败：", error);
+  process.exitCode = 1;
+  quitting = true;
+  clearTimeout(smokeReadyTimer);
+  smokeReadyTimer = null;
+  app.quit();
 }
 
 function updateMouseIgnoring() {
@@ -317,7 +443,7 @@ function createPetMenu({ includeActions }) {
 function createTray() {
   const icon = nativeImage.createEmpty();
   for (const representation of manifest.icons.trayRepresentations) {
-    const buffer = fs.readFileSync(generatedPath(...representation.file.split("/")));
+    const buffer = readGeneratedResource(representation.file);
     icon.addRepresentation({
       scaleFactor: representation.scaleFactor,
       buffer,
@@ -395,20 +521,45 @@ function parseFullscreenLine(line) {
 
 function fullscreenMonitorPath() {
   if (app.isPackaged) {
-    return path.join(
-      process.resourcesPath,
-      "app.asar.unpacked",
-      "scripts",
-      "fullscreen-monitor.ps1",
-    );
+    return path.join(process.resourcesPath, "fullscreen-monitor.ps1");
   }
   return path.join(__dirname, "..", "scripts", "fullscreen-monitor.ps1");
+}
+
+function verifyFullscreenMonitorIntegrity() {
+  if (!app.isPackaged) return;
+  if (!fullscreenMonitorExpectedHash) {
+    fullscreenMonitorExpectedHash = String(
+      globalThis[FULLSCREEN_HASH_SYMBOL] || "",
+    ).toLowerCase();
+    delete globalThis[FULLSCREEN_HASH_SYMBOL];
+  }
+  const expected = fullscreenMonitorExpectedHash;
+  if (!/^[a-f0-9]{64}$/.test(expected)) {
+    throw new Error("正式版本缺少全屏监测脚本校验值");
+  }
+  const monitorPath = fullscreenMonitorPath();
+  const actual = crypto
+    .createHash("sha256")
+    .update(fs.readFileSync(monitorPath))
+    .digest("hex");
+  const expectedBuffer = Buffer.from(expected, "hex");
+  const actualBuffer = Buffer.from(actual, "hex");
+  if (!crypto.timingSafeEqual(expectedBuffer, actualBuffer)) {
+    throw new Error("全屏监测脚本完整性校验失败");
+  }
 }
 
 function startFullscreenMonitor() {
   if (process.platform !== "win32" || fullscreenProcess || quitting) return;
   clearTimeout(fullscreenRestartTimer);
   fullscreenRestartTimer = null;
+  try {
+    verifyFullscreenMonitorIntegrity();
+  } catch (error) {
+    console.error("拒绝启动全屏监测：", error);
+    return;
+  }
   const monitorPath = fullscreenMonitorPath();
   if (!fs.existsSync(monitorPath)) return;
 
@@ -505,6 +656,10 @@ function moveBy(delta) {
 function registerIpc() {
   ipcMain.handle("pet:get-bootstrap", () => ({
     manifest,
+    assetBaseUrl: protectedResources
+      ? `${RESOURCE_SCHEME}://${RESOURCE_HOST}/assets/`
+      : null,
+    smokeTest: app.commandLine.hasSwitch("smoke-test"),
     runtime: {
       paused: runtime.paused,
       clickThrough: runtime.clickThrough,
@@ -517,6 +672,8 @@ function registerIpc() {
   }));
 
   ipcMain.on("pet:renderer-ready", () => {
+    clearTimeout(smokeReadyTimer);
+    smokeReadyTimer = null;
     if (app.commandLine.hasSwitch("smoke-test")) {
       runSmokeTest().catch((error) => {
         console.error("冒烟测试失败：", error);
@@ -524,6 +681,11 @@ function registerIpc() {
         quitApplication();
       });
     }
+  });
+  ipcMain.on("pet:renderer-failed", (_event, message) => {
+    failApplicationStartup(
+      new Error(`渲染进程初始化失败：${String(message || "未知错误")}`),
+    );
   });
 
   ipcMain.on("pet:update-layout", (_event, rect) => {
@@ -643,29 +805,34 @@ function delay(milliseconds) {
 
 async function captureSmokePage(filename) {
   const image = await petWindow.webContents.capturePage();
-  const output = path.join(__dirname, "..", "build", "smoke-test", filename);
+  const outputRoot = app.isPackaged
+    ? path.join(app.getPath("temp"), "tangmao-desktop-pet-smoke-output")
+    : path.join(__dirname, "..", "build", "smoke-test");
+  const output = path.join(outputRoot, filename);
   fs.mkdirSync(path.dirname(output), { recursive: true });
   fs.writeFileSync(output, image.toPNG());
 }
 
 async function rendererSmokeState() {
   return petWindow.webContents.executeJavaScript(
-    `({
-      mode: document.querySelector("#pet-stage")?.dataset.mode,
-      scale: Number(document.querySelector("#pet-stage")?.dataset.scale),
-      assetId: document.querySelector("#pet-image")?.dataset.assetId,
-      dailyCycle: Number(document.querySelector("#pet-stage")?.dataset.dailyCycle),
-      behaviorTrigger: document.querySelector("#pet-stage")?.dataset.behaviorTrigger,
-      bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
-      bubbleText: document.querySelector("#speech-bubble")?.textContent || "",
-      dragging:
-        typeof state !== "undefined" &&
-        state?.mode === "dragging",
-      dailyRemainingMs:
-        typeof state !== "undefined" && state?.dailyTimer
-          ? state.dailyTimer.remaining()
-          : 0
-    })`,
+    `(() => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      const state = smoke?.state;
+      return {
+        mode: document.querySelector("#pet-stage")?.dataset.mode,
+        scale: Number(document.querySelector("#pet-stage")?.dataset.scale),
+        assetId: document.querySelector("#pet-image")?.dataset.assetId,
+        frameIndex: Number(document.querySelector("#pet-image")?.dataset.frameIndex),
+        imageComplete: Boolean(document.querySelector("#pet-image")?.complete),
+        imageNaturalWidth: Number(document.querySelector("#pet-image")?.naturalWidth),
+        dailyCycle: Number(document.querySelector("#pet-stage")?.dataset.dailyCycle),
+        behaviorTrigger: document.querySelector("#pet-stage")?.dataset.behaviorTrigger,
+        bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
+        bubbleText: document.querySelector("#speech-bubble")?.textContent || "",
+        dragging: state?.mode === "dragging",
+        dailyRemainingMs: state?.dailyTimer ? state.dailyTimer.remaining() : 0
+      };
+    })()`,
     true,
   );
 }
@@ -673,6 +840,25 @@ async function rendererSmokeState() {
 async function verifyHoverMaskRegression() {
   return petWindow.webContents.executeJavaScript(
     `(async () => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      if (!smoke) throw new Error("缺少冒烟测试接口");
+      const {
+        captureHoverAnchor,
+        currentAsset,
+        currentFrame,
+        drawHitCanvas,
+        enterDaily,
+        geometryFor,
+        hitTest,
+        hitTestHoverAnchor,
+        petImage,
+        renderFrame,
+        setMode,
+        stopCurrent
+      } = smoke;
+      const assets = smoke.assets;
+      const manifest = smoke.manifest;
+      const state = smoke.state;
       const pair =
         manifest.daily.find((entry) => entry.number === 7) ||
         manifest.daily[0];
@@ -775,13 +961,13 @@ async function runSmokeTest() {
   }
   const dragBefore = await rendererSmokeState();
   await petWindow.webContents.executeJavaScript(
-    `beginDragVisual(); "drag-started"`,
+    `window.__TANGMAO_SMOKE__.beginDragVisual(); "drag-started"`,
     true,
   );
   await delay(180);
   const dragDuring = await rendererSmokeState();
   await petWindow.webContents.executeJavaScript(
-    `endDragVisual(); "drag-ended"`,
+    `window.__TANGMAO_SMOKE__.endDragVisual(); "drag-ended"`,
     true,
   );
   await delay(60);
@@ -835,7 +1021,10 @@ async function runSmokeTest() {
   await captureSmokePage("01-daily.png");
   const cycleBeforeManualAction = leaveHoverState.dailyCycle;
   await petWindow.webContents.executeJavaScript(
-    `startAction(manifest.staticActions[0], "smoke-manual")`,
+    `(() => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      smoke.startAction(smoke.manifest.staticActions[0], "smoke-manual");
+    })()`,
     true,
   );
   await delay(300);
@@ -870,11 +1059,73 @@ async function runSmokeTest() {
       `手动动作结束后没有重置日常倒计时：${JSON.stringify(dailyAfterManualAction)}`,
     );
   }
+  const gifAssetId = [...manifest.gifActions]
+    .filter((assetId) => manifest.assets[assetId]?.frames?.length > 1)
+    .sort((left, right) => {
+      const shortestFrame = (assetId) =>
+        Math.min(
+          ...manifest.assets[assetId].frames.map((frame) => frame.durationMs),
+        );
+      return shortestFrame(left) - shortestFrame(right);
+    })[0];
+  if (!gifAssetId) {
+    throw new Error("没有可用于冒烟测试的多帧 GIF");
+  }
   await petWindow.webContents.executeJavaScript(
-    `clickTimer = setTimeout(
-      () => queueOrExecuteClick("single"),
-      DOUBLE_CLICK_DELAY_MS
+    `window.__TANGMAO_SMOKE__.startAction(
+      ${JSON.stringify(gifAssetId)},
+      "smoke-gif"
     )`,
+    true,
+  );
+  await delay(50);
+  const gifTransitionState = await rendererSmokeState();
+  if (
+    gifTransitionState.mode !== "action-gif" ||
+    !gifTransitionState.bubbleVisible ||
+    !gifTransitionState.imageComplete ||
+    gifTransitionState.imageNaturalWidth <= 0
+  ) {
+    throw new Error(
+      `GIF 预载期间出现空白：${JSON.stringify(gifTransitionState)}`,
+    );
+  }
+  const gifReadyDeadline = Date.now() + 2000;
+  let firstGifState = gifTransitionState;
+  while (
+    (firstGifState.assetId !== gifAssetId ||
+      !firstGifState.imageComplete ||
+      firstGifState.imageNaturalWidth <= 0) &&
+    Date.now() < gifReadyDeadline
+  ) {
+    await delay(50);
+    firstGifState = await rendererSmokeState();
+  }
+  const gifFrameDeadline = Date.now() + 1200;
+  let laterGifState = firstGifState;
+  while (
+    laterGifState.frameIndex === firstGifState.frameIndex &&
+    Date.now() < gifFrameDeadline
+  ) {
+    await delay(50);
+    laterGifState = await rendererSmokeState();
+  }
+  if (
+    firstGifState.mode !== "action-gif" ||
+    firstGifState.assetId !== gifAssetId ||
+    !firstGifState.bubbleVisible ||
+    laterGifState.frameIndex === firstGifState.frameIndex ||
+    !firstGifState.imageComplete ||
+    firstGifState.imageNaturalWidth <= 0 ||
+    !laterGifState.imageComplete ||
+    laterGifState.imageNaturalWidth <= 0
+  ) {
+    throw new Error(
+      `加密 GIF 帧播放无效：${JSON.stringify({ firstGifState, laterGifState })}`,
+    );
+  }
+  await petWindow.webContents.executeJavaScript(
+    `window.__TANGMAO_SMOKE__.queueTestSingleClick()`,
     true,
   );
   const cycleBeforeManualMovement = dailyAfterManualAction.dailyCycle;
@@ -896,7 +1147,7 @@ async function runSmokeTest() {
   const pauseDeadline = Date.now() + 1000;
   while (
     !(await petWindow.webContents.executeJavaScript(
-      `Boolean(state?.fullscreenPaused)`,
+      `Boolean(window.__TANGMAO_SMOKE__?.state?.fullscreenPaused)`,
       true,
     )) &&
     Date.now() < pauseDeadline
@@ -916,7 +1167,7 @@ async function runSmokeTest() {
   const resumeDeadline = Date.now() + 1000;
   while (
     (await petWindow.webContents.executeJavaScript(
-      `Boolean(state?.fullscreenPaused)`,
+      `Boolean(window.__TANGMAO_SMOKE__?.state?.fullscreenPaused)`,
       true,
     )) &&
     Date.now() < resumeDeadline
@@ -933,7 +1184,10 @@ async function runSmokeTest() {
   }
   await captureSmokePage("03-movement.png");
   await petWindow.webContents.executeJavaScript(
-    `if (state.movement) state.movement.remainingMs = 80`,
+    `(() => {
+      const state = window.__TANGMAO_SMOKE__?.state;
+      if (state?.movement) state.movement.remainingMs = 80;
+    })()`,
     true,
   );
   await delay(300);
@@ -970,7 +1224,7 @@ async function runSmokeTest() {
   quitApplication();
 }
 
-function createWindow() {
+async function createWindow() {
   petWindow = new BrowserWindow({
     width: WINDOW_WIDTH,
     height: WINDOW_HEIGHT,
@@ -992,7 +1246,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      devTools: !app.isPackaged,
       backgroundThrottling: false,
+      partition: PET_SESSION_PARTITION,
     },
   });
 
@@ -1000,9 +1256,26 @@ function createWindow() {
   petWindow.setMenu(null);
   petWindow.setAlwaysOnTop(true, "floating");
   petWindow.setIgnoreMouseEvents(false);
-  petWindow.loadFile(path.join(__dirname, "index.html"));
   petWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   petWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  petWindow.webContents.on(
+    "render-process-gone",
+    (_event, details) => {
+      if (quitting) return;
+      failApplicationStartup(
+        new Error(`渲染进程异常退出：${details.reason} (${details.exitCode})`),
+      );
+    },
+  );
+  smokeReadyTimer = setTimeout(
+    () => failApplicationStartup(new Error("渲染进程就绪等待超时")),
+    20000,
+  );
+  if (protectedResources) {
+    await petWindow.loadURL(`${RESOURCE_SCHEME}://${RESOURCE_HOST}/index.html`);
+  } else {
+    await petWindow.loadFile(path.join(__dirname, "index.html"));
+  }
   petWindow.on("close", (event) => {
     if (quitting) return;
     event.preventDefault();
@@ -1024,13 +1297,18 @@ if (!gotLock) {
   app.on("second-instance", () => {
     // 严格单实例：重复启动静默退出，不影响已有实例。
   });
-  app.whenReady().then(() => {
-    loadManifest();
-    registerIpc();
-    createWindow();
-    createTray();
-    startFullscreenMonitor();
-  });
+  app
+    .whenReady()
+    .then(async () => {
+      loadManifest();
+      registerProtectedResourceProtocol();
+      verifyFullscreenMonitorIntegrity();
+      registerIpc();
+      await createWindow();
+      createTray();
+      startFullscreenMonitor();
+    })
+    .catch(failApplicationStartup);
 }
 
 app.on("before-quit", () => {

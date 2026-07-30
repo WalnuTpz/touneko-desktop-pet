@@ -15,7 +15,10 @@ const {
   openingDialogueForLaunch,
 } = window.PetDialogue;
 
-const GENERATED_ROOT = new URL("../assets/generated/", window.location.href);
+const DEVELOPMENT_GENERATED_ROOT = new URL(
+  "../assets/generated/",
+  window.location.href,
+);
 const DOUBLE_CLICK_DELAY_MS = 280;
 const DRAG_THRESHOLD = 5;
 const BASELINE_MARGIN = 18;
@@ -25,6 +28,7 @@ const BUBBLE_GAP = 17;
 
 let manifest = null;
 let assets = null;
+let assetBaseUrl = DEVELOPMENT_GENERATED_ROOT.href;
 let windowSize = { width: 960, height: 900 };
 let state = null;
 let pointerState = null;
@@ -40,6 +44,7 @@ let pointerPollWarningShown = false;
 let pointerPollStopped = false;
 let bubbleShapeReleaseTimer = null;
 let hoverAnchor = null;
+const gifFrameCache = new Map();
 
 const hitCanvas = document.createElement("canvas");
 const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
@@ -49,7 +54,28 @@ const hoverAnchorContext = hoverAnchorCanvas.getContext("2d", {
 });
 
 function assetUrl(relativePath) {
-  return new URL(relativePath, GENERATED_ROOT).href;
+  return new URL(relativePath, assetBaseUrl).href;
+}
+
+function primeGifFrames(assetId) {
+  if (gifFrameCache.has(assetId)) return gifFrameCache.get(assetId).promise;
+  const asset = assets?.[assetId];
+  if (!asset || asset.kind !== "gif") return Promise.resolve();
+  const images = asset.frames.map((frame) => {
+    const image = new Image();
+    image.decoding = "async";
+    image.loading = "eager";
+    image.src = assetUrl(frame.file);
+    return image;
+  });
+  const promise = Promise.all(images.map((image) => image.decode()))
+    .then(() => images)
+    .catch((error) => {
+      gifFrameCache.delete(assetId);
+      throw error;
+    });
+  gifFrameCache.set(assetId, { images, promise });
+  return promise;
 }
 
 function currentAsset() {
@@ -234,6 +260,7 @@ petImage.addEventListener("load", () => {
 petImage.addEventListener("error", () => {
   imageLoaded = false;
   console.error("桌宠素材载入失败：", petImage.src);
+  window.desktopPet.reportFailure(`桌宠素材载入失败：${petImage.src}`);
 });
 
 function hitTestCanvas(
@@ -347,6 +374,7 @@ class GifPlayer {
     this.startedAt = 0;
     this.timeout = null;
     this.paused = false;
+    this.pending = false;
     this.onComplete = null;
     this.token = 0;
   }
@@ -359,9 +387,25 @@ class GifPlayer {
     this.targetLoops = Math.max(1, targetLoops);
     this.onComplete = onComplete;
     this.token += 1;
-    renderFrame(assetId, 0);
+    const token = this.token;
+    this.pending = true;
     this.remainingMs = assets[assetId].frames[0].durationMs;
-    this.#arm(this.token);
+    primeGifFrames(assetId)
+      .then(async () => {
+        if (token !== this.token || this.assetId !== assetId) return;
+        renderFrame(assetId, 0);
+        await petImage.decode();
+        if (token !== this.token || this.assetId !== assetId) return;
+        this.pending = false;
+        if (!this.paused) this.#arm(token);
+      })
+      .catch((error) => {
+        if (token !== this.token || this.assetId !== assetId) return;
+        this.stop();
+        window.desktopPet.reportFailure(
+          `GIF 帧预载失败：${error?.message || error}`,
+        );
+      });
   }
 
   #arm(token) {
@@ -391,7 +435,11 @@ class GifPlayer {
   }
 
   pause() {
-    if (!this.assetId || this.paused || this.timeout === null) return;
+    if (!this.assetId || this.paused) return;
+    if (this.pending || this.timeout === null) {
+      this.paused = true;
+      return;
+    }
     clearTimeout(this.timeout);
     this.timeout = null;
     this.remainingMs = Math.max(
@@ -403,6 +451,8 @@ class GifPlayer {
 
   resume() {
     if (!this.assetId || !this.paused) return;
+    this.paused = false;
+    if (this.pending) return;
     this.#arm(this.token);
   }
 
@@ -414,6 +464,7 @@ class GifPlayer {
     this.completedLoops = 0;
     this.remainingMs = 0;
     this.paused = false;
+    this.pending = false;
     this.onComplete = null;
     this.token += 1;
   }
@@ -923,6 +974,45 @@ function handleCommand(payload) {
   }
 }
 
+function installSmokeApi(enabled) {
+  if (!enabled) return;
+  const api = {
+    petImage,
+    beginDragVisual,
+    captureHoverAnchor,
+    currentAsset,
+    currentFrame,
+    drawHitCanvas,
+    endDragVisual,
+    enterDaily,
+    geometryFor,
+    hitTest,
+    hitTestHoverAnchor,
+    renderFrame,
+    setMode,
+    startAction,
+    stopCurrent,
+    queueTestSingleClick() {
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(
+        () => queueOrExecuteClick("single"),
+        DOUBLE_CLICK_DELAY_MS,
+      );
+    },
+  };
+  Object.defineProperties(api, {
+    assets: { get: () => assets },
+    manifest: { get: () => manifest },
+    state: { get: () => state },
+  });
+  Object.defineProperty(window, "__TANGMAO_SMOKE__", {
+    configurable: false,
+    enumerable: false,
+    writable: false,
+    value: Object.freeze(api),
+  });
+}
+
 function updatePointerPosition(clientX, clientY) {
   if (!state || state.mode === "hidden" || state.clickThrough) {
     reportPointerRegion(false);
@@ -1122,6 +1212,10 @@ async function initialize() {
   const bootstrap = await window.desktopPet.getBootstrap();
   manifest = bootstrap.manifest;
   assets = manifest.assets;
+  assetBaseUrl =
+    typeof bootstrap.assetBaseUrl === "string" && bootstrap.assetBaseUrl
+      ? bootstrap.assetBaseUrl
+      : DEVELOPMENT_GENERATED_ROOT.href;
   windowSize = bootstrap.window;
   state = {
     mode: "starting",
@@ -1149,6 +1243,7 @@ async function initialize() {
   state.actionTimer = new PausableTimer(finishAction);
   state.hoverLeaveTimer = new PausableTimer(leaveHover);
   state.bubbleTimer = new PausableTimer(hideBubble);
+  installSmokeApi(Boolean(bootstrap.smokeTest));
   window.desktopPet.onCommand(handleCommand);
   stage.dataset.scale = String(state.userScale);
   setFacing(1);
@@ -1165,4 +1260,5 @@ window.addEventListener("beforeunload", () => {
 
 initialize().catch((error) => {
   console.error("糖猫桌宠初始化失败：", error);
+  window.desktopPet.reportFailure(error?.stack || error?.message || error);
 });
