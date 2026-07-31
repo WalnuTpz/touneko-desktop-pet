@@ -3,15 +3,27 @@ const {
   StableValueTracker,
   candidatesOutsideRecent,
   chooseGifLoopCount,
+  decelerateVelocity,
+  estimateReleaseVelocity,
   pickWeighted,
   pickWithRecent,
   pushRecent,
   randomInteger,
+  reflectVelocity,
+  shortestAngleDelta,
+  validCycleCounts,
 } = require("../src/core");
 
 function sequenceRandom(values) {
   let index = 0;
   return () => values[Math.min(index++, values.length - 1)];
+}
+
+function assertClose(actual, expected, epsilon = 1e-9) {
+  assert.ok(
+    Math.abs(actual - expected) <= epsilon,
+    `expected ${actual} to be within ${epsilon} of ${expected}`,
+  );
 }
 
 assert.equal(randomInteger(2, 4, () => 0), 2);
@@ -65,6 +77,73 @@ assert.equal(chooseGifLoopCount(3000, () => 0), 1);
 assert.equal(chooseGifLoopCount(1000, () => 0), 3);
 assert.equal(chooseGifLoopCount(1000, () => 0.999), 6);
 assert.equal(chooseGifLoopCount(540, sequenceRandom([0.5])), 9);
+
+assert.deepEqual(validCycleCounts(1000), [3, 4, 5, 6, 7, 8]);
+assert.deepEqual(validCycleCounts(1500, 3000, 3000), [2]);
+assert.deepEqual(validCycleCounts(5000, 3000, 4000), []);
+assert.throws(() => validCycleCounts(0), RangeError);
+assert.throws(() => validCycleCounts(Number.NaN), RangeError);
+
+assert.deepEqual(
+  estimateReleaseVelocity([
+    { x: 0, y: 0, time: 0 },
+    { x: 10, y: 10, time: 100 },
+    { x: 40, y: 50, time: 200 },
+  ]),
+  { x: 300, y: 400, speed: 500 },
+);
+assert.deepEqual(
+  estimateReleaseVelocity([
+    { x: -100, y: -100, time: 79 },
+    { x: 0, y: 0, time: 80 },
+    { x: 12, y: 0, time: 200 },
+  ]),
+  { x: 100, y: 0, speed: 100 },
+);
+const cappedVelocity = estimateReleaseVelocity([
+  { x: 0, y: 0, time: 0 },
+  { x: 300, y: 400, time: 100 },
+]);
+assert.deepEqual(cappedVelocity, { x: 1440, y: 1920, speed: 2400 });
+assert.deepEqual(estimateReleaseVelocity([]), { x: 0, y: 0, speed: 0 });
+assert.deepEqual(
+  estimateReleaseVelocity([
+    { x: 0, y: 0, time: 10 },
+    { x: 5, y: 5, time: 10 },
+  ]),
+  { x: 0, y: 0, speed: 0 },
+);
+
+const slowedVelocity = decelerateVelocity({ x: 3, y: 4 }, 2, 1000);
+assertClose(slowedVelocity.x, 1.8);
+assertClose(slowedVelocity.y, 2.4);
+assertClose(slowedVelocity.speed, 3);
+assert.deepEqual(decelerateVelocity({ x: 3, y: 4 }, 10, 1000), {
+  x: 0,
+  y: 0,
+  speed: 0,
+});
+
+assert.deepEqual(reflectVelocity({ x: 10, y: -20 }, 1, 1, 0.5), {
+  x: -5,
+  y: 10,
+  speed: Math.hypot(5, 10),
+});
+assert.deepEqual(reflectVelocity({ x: 10, y: -20 }, 1, 0, 0.5), {
+  x: -5,
+  y: -20,
+  speed: Math.hypot(5, 20),
+});
+
+assertClose(
+  shortestAngleDelta((350 * Math.PI) / 180, (10 * Math.PI) / 180),
+  (20 * Math.PI) / 180,
+);
+assertClose(
+  shortestAngleDelta((10 * Math.PI) / 180, (350 * Math.PI) / 180),
+  (-20 * Math.PI) / 180,
+);
+assert.equal(Math.abs(shortestAngleDelta(0, Math.PI * 3)), Math.PI);
 
 const stable = new StableValueTracker(null);
 assert.deepEqual(stable.sample("display-1", 3), {
