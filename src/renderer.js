@@ -3,6 +3,7 @@ const petImage = document.querySelector("#pet-image");
 const speechBubble = document.querySelector("#speech-bubble");
 const {
   PausableTimer,
+  THROW_MAX_SPEED,
   chooseGifLoopCount,
   decelerateVelocity,
   estimateReleaseVelocity,
@@ -34,7 +35,6 @@ const PLAY_POINTER_POLL_INTERVAL_MS = 50;
 const PET_SHAPE_PADDING = 8;
 const BUBBLE_GAP = 17;
 const THROW_TRIGGER_SPEED = 900;
-const THROW_MAX_SPEED = 2400;
 const THROW_DECELERATION = 700;
 const THROW_STOP_SPEED = 60;
 const THROW_BOUNCE_RETENTION = 0.7;
@@ -44,10 +44,6 @@ const PLAY_APPROACH_STOP_DISTANCE = 160;
 const PLAY_SWAT_DISTANCE = 100;
 const PLAY_SWAT_DURATION_MS = 1200;
 const PLAY_SWAT_COOLDOWN_MS = 4000;
-const PLAY_ESCAPE_DISTANCE = 220;
-const PLAY_ESCAPE_APPROACH_SPEED = 900;
-const PLAY_ESCAPE_DURATION_MS = 1200;
-const PLAY_ESCAPE_COOLDOWN_MS = 3000;
 const PLAY_CIRCLE_MIN_RADIUS = 80;
 const PLAY_CIRCLE_MAX_RADIUS = 260;
 const PLAY_CIRCLE_WINDOW_MS = 3000;
@@ -97,6 +93,19 @@ let bubbleShapeReleaseTimer = null;
 let hoverAnchor = null;
 const gifFrameCache = new Map();
 const staticFrameCache = new Map();
+
+function cancelDelayedSingleClick() {
+  clearTimeout(clickTimer);
+  clickTimer = null;
+}
+
+function scheduleSingleClick() {
+  cancelDelayedSingleClick();
+  clickTimer = setTimeout(() => {
+    clickTimer = null;
+    handleClickIntent("single");
+  }, DOUBLE_CLICK_DELAY_MS);
+}
 
 const hitCanvas = document.createElement("canvas");
 const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
@@ -725,9 +734,8 @@ function beginDragVisual() {
   cancelMovement();
   state.playReactionTimer.cancel();
   state.playChaseAttemptTimer.cancel();
-  state.pendingClick = null;
-  clearTimeout(clickTimer);
-  clickTimer = null;
+  restorePlaySwatFacing();
+  cancelDelayedSingleClick();
   hideBubble(true);
   hoverAnchor = null;
   setMode("dragging");
@@ -805,9 +813,7 @@ function stopCurrent({ clearPending = false } = {}) {
   hideBubble(true);
   hoverAnchor = null;
   if (clearPending) {
-    state.pendingClick = null;
-    clearTimeout(clickTimer);
-    clickTimer = null;
+    cancelDelayedSingleClick();
   }
 }
 
@@ -876,8 +882,16 @@ function startDailyTimer() {
   }
 }
 
+function restorePlaySwatFacing() {
+  const facing = state.play?.swatBaseFacing;
+  if (!facing) return;
+  state.play.swatBaseFacing = null;
+  setFacing(facing);
+}
+
 function stopPlaySession(report = true) {
   if (!state.play) return;
+  restorePlaySwatFacing();
   state.playTimer.cancel();
   state.playReactionTimer.cancel();
   state.playChaseAttemptTimer.cancel();
@@ -923,13 +937,7 @@ function leaveHover() {
 }
 
 function finishAction() {
-  const pending = state.pendingClick;
-  state.pendingClick = null;
-  if (pending) {
-    executeClickIntent(pending);
-  } else {
-    enterDaily();
-  }
+  enterDaily();
 }
 
 function startAction(assetId, trigger = "automatic") {
@@ -976,7 +984,7 @@ function executeClickIntent(kind) {
   startAction(assetId, kind);
 }
 
-function queueOrExecuteClick(kind) {
+function handleClickIntent(kind) {
   if (
     state.mode === "hidden" ||
     state.mode === "playing" ||
@@ -986,12 +994,6 @@ function queueOrExecuteClick(kind) {
     state.mode === "dragging" ||
     state.fullscreenPaused
   ) {
-    return;
-  }
-  if (state.mode === "action-gif" && state.gifPlayer.isActive()) {
-    if (kind === "double" || state.pendingClick !== "double") {
-      state.pendingClick = kind;
-    }
     return;
   }
   executeClickIntent(kind);
@@ -1258,6 +1260,7 @@ function resumePlayIdle() {
     enterDaily();
     return;
   }
+  restorePlaySwatFacing();
   cancelMovement();
   state.playReactionTimer.cancel();
   renderPlayIdle();
@@ -1273,13 +1276,12 @@ function onPlayExpired() {
   enterDaily();
 }
 
-function startPlay(source = "pet") {
+function startPlay() {
   if (
     state.fullscreenPaused ||
     state.play ||
     state.mode === "hidden" ||
-    state.mode === "throwing" ||
-    (state.mode === "landing" && source !== "pet")
+    state.mode === "throwing"
   ) {
     return;
   }
@@ -1291,8 +1293,8 @@ function startPlay(source = "pet") {
     cursor: null,
     lastSample: null,
     circleSamples: [],
+    swatBaseFacing: null,
     cooldownUntil: {
-      escape: 0,
       circle: 0,
       swat: 0,
     },
@@ -1313,6 +1315,14 @@ function startPlayReaction(mode, assetId, durationMs) {
   resetVerticalFacing();
   renderFrame(assetId, 0);
   state.playReactionTimer.start(durationMs);
+}
+
+function setPlayPointerFacing(direction) {
+  const greetingSwat =
+    state.mode === "play-swat" &&
+    normalizeAssetName(currentAsset()?.name) === "打招呼";
+  state.play.swatBaseFacing = greetingSwat ? direction : null;
+  setFacing(direction * (greetingSwat ? -1 : 1));
 }
 
 function startPlayMotion(kind, movementName, speed, options = {}) {
@@ -1346,18 +1356,6 @@ function startPlayMotion(kind, movementName, speed, options = {}) {
   scheduleMovementFrame(movement);
 }
 
-function startPlayEscape(now, cursor) {
-  const center = petCenter();
-  const deltaX = center.x - cursor.clientX;
-  const deltaY = center.y - cursor.clientY;
-  const length = Math.hypot(deltaX, deltaY) || 1;
-  state.play.cooldownUntil.escape = now + PLAY_ESCAPE_COOLDOWN_MS;
-  startPlayMotion("play-escape", "跑", 120, {
-    direction: { x: deltaX / length, y: deltaY / length },
-    endsAt: now + PLAY_ESCAPE_DURATION_MS,
-  });
-}
-
 function startPlayConfused(now) {
   state.play.cooldownUntil.circle = now + PLAY_CIRCLE_COOLDOWN_MS;
   state.play.circleSamples = [];
@@ -1368,13 +1366,14 @@ function startPlayConfused(now) {
   );
 }
 
-function startPlaySwat(now) {
+function startPlaySwat(
+  now,
+  cursorDirection,
+  assetId = pickUniform(manifest.playBehavior.swatAssets),
+) {
   state.play.cooldownUntil.swat = now + PLAY_SWAT_COOLDOWN_MS;
-  startPlayReaction(
-    "play-swat",
-    pickUniform(manifest.playBehavior.swatAssets),
-    PLAY_SWAT_DURATION_MS,
-  );
+  startPlayReaction("play-swat", assetId, PLAY_SWAT_DURATION_MS);
+  setPlayPointerFacing(cursorDirection);
 }
 
 function tryStartPlayChase() {
@@ -1438,42 +1437,29 @@ function handlePlayPointer(point) {
         point.screenY - previous.screenY,
       ) / elapsedSeconds
     : 0;
-  const radialApproachSpeed = previous
-    ? (previous.distance - distance) / elapsedSeconds
-    : 0;
   state.play.cursor = point;
   state.play.lastSample = {
     screenX: point.screenX,
     screenY: point.screenY,
-    distance,
     time: now,
   };
-  if (deltaX !== 0 && state.mode !== "play-escape") {
+  if (deltaX !== 0) {
     const direction = deltaX < 0 ? -1 : 1;
     if (state.movement?.kind.startsWith("play-")) {
       setMovementFacing(direction, state.movement.sourceFacing);
     } else {
-      setFacing(direction);
+      setPlayPointerFacing(direction);
     }
   }
 
   if (
     state.mode === "play-swat" ||
-    state.mode === "play-confused" ||
-    state.mode === "play-escape"
+    state.mode === "play-confused"
   ) {
     return;
   }
 
   const circled = updateCircleSamples(now, point, center, distance);
-  if (
-    distance <= PLAY_ESCAPE_DISTANCE &&
-    radialApproachSpeed >= PLAY_ESCAPE_APPROACH_SPEED &&
-    now >= state.play.cooldownUntil.escape
-  ) {
-    startPlayEscape(now, point);
-    return;
-  }
   if (circled && now >= state.play.cooldownUntil.circle) {
     startPlayConfused(now);
     return;
@@ -1483,7 +1469,7 @@ function handlePlayPointer(point) {
     cursorSpeed <= POINTER_SLOW_SPEED &&
     now >= state.play.cooldownUntil.swat
   ) {
-    startPlaySwat(now);
+    startPlaySwat(now, deltaX < 0 ? -1 : 1);
     return;
   }
   if (state.mode === "play-chase") return;
@@ -1661,7 +1647,7 @@ function handleCommand(payload) {
       break;
     case "set-playing":
       if (payload.value) {
-        startPlay(payload.source);
+        startPlay();
       } else if (state.play) {
         enterDaily();
       }
@@ -1720,17 +1706,16 @@ function installSmokeApi(enabled) {
     hitTest,
     hitTestHoverAnchor,
     renderFrame,
+    resumePlayIdle,
+    setFacing,
     setMode,
     startAction,
     startPlay,
+    startPlaySwat,
     startThrow,
     stopCurrent,
     queueTestSingleClick() {
-      clearTimeout(clickTimer);
-      clickTimer = setTimeout(
-        () => queueOrExecuteClick("single"),
-        DOUBLE_CLICK_DELAY_MS,
-      );
+      scheduleSingleClick();
     },
   };
   Object.defineProperties(api, {
@@ -1996,18 +1981,13 @@ stage.addEventListener("lostpointercapture", (event) => {
 
 stage.addEventListener("click", () => {
   if (Date.now() < suppressClickUntil) return;
-  clearTimeout(clickTimer);
-  clickTimer = setTimeout(
-    () => queueOrExecuteClick("single"),
-    DOUBLE_CLICK_DELAY_MS,
-  );
+  scheduleSingleClick();
 });
 
 stage.addEventListener("dblclick", () => {
   if (Date.now() < suppressClickUntil) return;
-  clearTimeout(clickTimer);
-  clickTimer = null;
-  queueOrExecuteClick("double");
+  cancelDelayedSingleClick();
+  handleClickIntent("double");
 });
 
 window.addEventListener("contextmenu", (event) => {
@@ -2041,7 +2021,6 @@ async function initialize() {
     facing: 1,
     facingY: 1,
     recent: [],
-    pendingClick: null,
     manualPaused: Boolean(bootstrap.runtime.paused),
     clickThrough: Boolean(bootstrap.runtime.clickThrough),
     userScale: Number(bootstrap.runtime.scale) || 1,

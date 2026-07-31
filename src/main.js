@@ -519,16 +519,10 @@ function setEnvironmentAwareness(value) {
   updateMenus();
 }
 
-function requestPlaying(value, { fromTray = false } = {}) {
+function requestPlaying(value) {
   const playing = Boolean(value);
   if (playing && runtime.fullscreenHidden) return;
-  if (playing && fromTray && runtime.userHidden) {
-    callPetBack();
-  }
-  sendCommand("set-playing", {
-    value: playing,
-    source: fromTray ? "tray" : "pet",
-  });
+  sendCommand("set-playing", { value: playing });
 }
 
 function hideByUser() {
@@ -576,11 +570,11 @@ function scaleSubmenu() {
   }));
 }
 
-function playMenuItem(fromTray) {
+function playMenuItem() {
   return {
     label: runtime.playing ? "停止玩耍" : "和糖猫玩耍",
     enabled: runtime.playing || !runtime.fullscreenHidden,
-    click: () => requestPlaying(!runtime.playing, { fromTray }),
+    click: () => requestPlaying(!runtime.playing),
   };
 }
 
@@ -607,7 +601,7 @@ function createPetMenu() {
       label: "出去走走",
       click: () => sendCommand("random-movement", { interrupt: true }),
     },
-    playMenuItem(false),
+    playMenuItem(),
     { type: "separator" },
     {
       label: runtime.paused ? "继续活动" : "暂停活动",
@@ -631,7 +625,6 @@ function createPetMenu() {
 
 function createTrayMenu() {
   return Menu.buildFromTemplate([
-    playMenuItem(true),
     {
       label: runtime.paused ? "继续活动" : "暂停活动",
       click: () => setPaused(!runtime.paused),
@@ -643,14 +636,14 @@ function createTrayMenu() {
       click: (item) => setEnvironmentAwareness(item.checked),
     },
     {
-      label: "性格",
-      submenu: personalitySubmenu(),
-    },
-    {
       label: "鼠标穿透",
       type: "checkbox",
       checked: runtime.clickThrough,
       click: (item) => setClickThrough(item.checked),
+    },
+    {
+      label: "性格",
+      submenu: personalitySubmenu(),
     },
     {
       label: "调整大小",
@@ -1076,6 +1069,7 @@ async function rendererSmokeState() {
         actionRemainingMs: state?.actionTimer ? state.actionTimer.remaining() : 0,
         playRemainingMs: state?.playTimer ? state.playTimer.remaining() : 0,
         playing: Boolean(state?.play),
+        playSwatBaseFacing: state?.play?.swatBaseFacing || null,
         manualPaused: Boolean(state?.manualPaused),
         fullscreenPaused: Boolean(state?.fullscreenPaused),
         personality: state?.personality,
@@ -1215,11 +1209,10 @@ function verifyMainProcessV3Contract() {
     "退出",
   ];
   const expectedTraySignature = [
-    playLabel,
     pauseLabel,
     "环境感知",
-    "性格",
     "鼠标穿透",
+    "性格",
     "调整大小",
     "separator",
     runtime.userHidden ? "叫糖猫回来" : "藏起来",
@@ -1243,11 +1236,12 @@ function verifyMainProcessV3Contract() {
   if (
     JSON.stringify(personalityLabels) !==
       JSON.stringify(["安静", "默认", "活泼"]) ||
-    trayMenu.items[2].checked !== runtime.environmentAwareness ||
-    trayMenu.items[0].enabled !==
+    trayMenu.items[1].checked !== runtime.environmentAwareness ||
+    trayMenu.items[2].checked !== runtime.clickThrough ||
+    petMenu.items[2].enabled !==
       (runtime.playing || !runtime.fullscreenHidden)
   ) {
-    throw new Error("第三版托盘动态状态无效");
+    throw new Error("第三版菜单动态状态无效");
   }
 
   const storedSettings = JSON.parse(
@@ -1473,6 +1467,17 @@ async function runSmokeTest() {
     `window.__TANGMAO_SMOKE__.queueTestSingleClick()`,
     true,
   );
+  await delay(350);
+  const interruptedGifState = await rendererSmokeState();
+  if (
+    !["action-static", "action-gif"].includes(interruptedGifState.mode) ||
+    interruptedGifState.assetId === gifAssetId ||
+    interruptedGifState.behaviorTrigger !== "single"
+  ) {
+    throw new Error(
+      `单击没有立即替换普通 GIF：${JSON.stringify(interruptedGifState)}`,
+    );
+  }
   const cycleBeforeManualMovement = dailyAfterManualAction.dailyCycle;
   const positionBeforeMovement = petWindow.getPosition();
   sendCommand("random-movement", { interrupt: true });
@@ -1630,7 +1635,7 @@ async function runSmokeTest() {
   );
 
   await petWindow.webContents.executeJavaScript(
-    `window.__TANGMAO_SMOKE__.startPlay("pet")`,
+    `window.__TANGMAO_SMOKE__.startPlay()`,
     true,
   );
   await delay(120);
@@ -1644,6 +1649,50 @@ async function runSmokeTest() {
     !runtime.playing
   ) {
     throw new Error(`90秒玩耍初态无效：${JSON.stringify(playState)}`);
+  }
+  const greetingAssetId = manifest.playBehavior.swatAssets.find(
+    (assetId) => manifest.assets[assetId]?.name === "打招呼",
+  );
+  if (!greetingAssetId) {
+    throw new Error("玩耍拍鼠标素材中缺少打招呼");
+  }
+  await petWindow.webContents.executeJavaScript(
+    `(() => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      smoke.setFacing(1);
+      smoke.startPlaySwat(
+        performance.now(),
+        1,
+        ${JSON.stringify(greetingAssetId)}
+      );
+    })()`,
+    true,
+  );
+  await delay(80);
+  const greetingSwatState = await rendererSmokeState();
+  if (
+    greetingSwatState.mode !== "play-swat" ||
+    greetingSwatState.assetId !== greetingAssetId ||
+    ![-1, 1].includes(greetingSwatState.playSwatBaseFacing) ||
+    greetingSwatState.facing !== -greetingSwatState.playSwatBaseFacing
+  ) {
+    throw new Error(
+      `玩耍打招呼没有朝鼠标侧额外翻转：${JSON.stringify(greetingSwatState)}`,
+    );
+  }
+  await petWindow.webContents.executeJavaScript(
+    `window.__TANGMAO_SMOKE__.resumePlayIdle()`,
+    true,
+  );
+  await delay(50);
+  const restoredGreetingState = await rendererSmokeState();
+  if (
+    !restoredGreetingState.playing ||
+    restoredGreetingState.facing !== greetingSwatState.playSwatBaseFacing
+  ) {
+    throw new Error(
+      `玩耍打招呼结束后没有恢复朝向：${JSON.stringify(restoredGreetingState)}`,
+    );
   }
   setPaused(true);
   const playBeforePauseDelay = await rendererSmokeState();
