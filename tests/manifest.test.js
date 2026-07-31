@@ -91,6 +91,19 @@ assert.deepEqual(manifest.movement["跑"], {
   },
 });
 
+const runVisibleSize = representativeVisibleSize(movementAssets.run);
+const run2VisibleSize = representativeVisibleSize(movementAssets.run2);
+assert.ok(
+  run2VisibleSize.width > runVisibleSize.width &&
+    run2VisibleSize.width <= runVisibleSize.width * 1.1,
+  "跑2.png 缩小后只应比跑.png 略宽，以保留跑动姿势的张力",
+);
+assert.ok(
+  run2VisibleSize.height >= runVisibleSize.height * 0.75 &&
+    run2VisibleSize.height < runVisibleSize.height,
+  "跑2.png 应明显收小，但不能缩到与跑.png 失去连续性",
+);
+
 const throwAsset = assetBySource("assets/local/糖猫合集/飞猫.png");
 const landingAssets = [
   "彩虹吐.png",
@@ -368,19 +381,24 @@ for (const asset of swallowingCats) {
   );
 }
 
-const jumpingCats = [
-  assetBySource("assets/local/糖猫合集/跳跳.png"),
-  assetBySource("assets/local/糖猫合集/动图/跳跳.gif"),
-];
-assert.ok(jumpingCats.every(Boolean));
-for (const asset of jumpingCats) {
-  const bounds = asset.frames[asset.representativeFrame].bounds;
-  const visibleHeight = bounds.height * asset.displayScale;
-  assert.ok(
-    visibleHeight >= 165 && visibleHeight <= 170,
-    `${asset.name} 的静态图与 GIF 应同步稍微放大`,
-  );
-}
+const ordinaryJump = assetBySource("assets/local/糖猫合集/跳跳.png");
+const movementJump = assetBySource("assets/local/糖猫合集/动图/跳跳.gif");
+assert.ok(ordinaryJump && movementJump);
+const ordinaryJumpHeight = representativeVisibleSize(ordinaryJump).height;
+const movementJumpHeight = representativeVisibleSize(movementJump).height;
+assert.ok(
+  ordinaryJumpHeight >= 172 && ordinaryJumpHeight <= 178,
+  "普通动作跳跳.png 应在既有基础上稍微放大",
+);
+assert.ok(
+  movementJumpHeight >= 165 && movementJumpHeight <= 170,
+  "移动专用跳跳.gif 应保持原有视觉大小",
+);
+assert.ok(
+  ordinaryJumpHeight > movementJumpHeight * 1.03 &&
+    ordinaryJumpHeight < movementJumpHeight * 1.08,
+  "只应温和放大普通动作跳跳.png，不应连带修改移动 GIF",
+);
 
 const crawlingCat = assetBySource(
   "assets/local/糖猫合集/动图/蛆爬行.gif",
@@ -416,7 +434,7 @@ for (const [source, minimumHeight, maximumHeight] of enlargedSlenderAssets) {
 const reducedWideAssets = [
   ["assets/local/糖猫合集/买买买.png", 255, 265, 128, 135],
   ["assets/local/糖猫合集/收废品.png", 255, 265, 128, 135],
-  ["assets/local/糖猫合集/爱你.png", 238, 247, 134, 140],
+  ["assets/local/糖猫合集/爱你.png", 225, 235, 125, 133],
   ["assets/local/糖猫合集/骑鳄鱼.png", 280, 292, 168, 174],
 ];
 for (const [
@@ -435,6 +453,25 @@ for (const [
       height >= minimumHeight &&
       height <= maximumHeight,
     `${asset.name} 应温和缩小，避免实体画面明显大于普通动作`,
+  );
+}
+
+const slightlyReducedOrdinaryActions = [
+  "凌乱1.png",
+  "凌乱2.png",
+  "躺着观察.png",
+  "摸鸟蛋.png",
+  "摸鸟蛋2.png",
+  "放弃.png",
+];
+for (const filename of slightlyReducedOrdinaryActions) {
+  const source = `assets/local/糖猫合集/${filename}`;
+  const asset = assetBySource(source);
+  assert.ok(asset, `未找到需要缩小的普通动作：${source}`);
+  const { height } = representativeVisibleSize(asset);
+  assert.ok(
+    height >= 140 && height <= 147,
+    `${asset.name} 应比常规 152 像素主体稍小，但不能缩得突兀`,
   );
 }
 
