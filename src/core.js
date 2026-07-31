@@ -107,6 +107,97 @@
     return 1;
   }
 
+  function validCycleCounts(
+    cycleDurationMs,
+    minimumDurationMs = 3000,
+    maximumDurationMs = 8000,
+  ) {
+    const cycleDuration = Number(cycleDurationMs);
+    if (!Number.isFinite(cycleDuration) || cycleDuration <= 0) {
+      throw new RangeError("cycleDurationMs must be a positive finite number");
+    }
+    const minimum = Math.max(1, Math.ceil(Number(minimumDurationMs) / cycleDuration));
+    const maximum = Math.floor(Number(maximumDurationMs) / cycleDuration);
+    const counts = [];
+    for (let count = minimum; count <= maximum; count += 1) {
+      counts.push(count);
+    }
+    return counts;
+  }
+
+  function estimateReleaseVelocity(samples, windowMs = 120, maxSpeed = 2400) {
+    const validSamples = samples.filter(
+      (sample) =>
+        sample &&
+        Number.isFinite(sample.x) &&
+        Number.isFinite(sample.y) &&
+        Number.isFinite(sample.time),
+    );
+    if (validSamples.length < 2) {
+      return { x: 0, y: 0, speed: 0 };
+    }
+
+    const last = validSamples[validSamples.length - 1];
+    const cutoffTime = last.time - windowMs;
+    let first = last;
+    for (let index = validSamples.length - 2; index >= 0; index -= 1) {
+      if (validSamples[index].time < cutoffTime) break;
+      first = validSamples[index];
+    }
+
+    const elapsedMs = last.time - first.time;
+    if (elapsedMs <= 0) {
+      return { x: 0, y: 0, speed: 0 };
+    }
+
+    let x = ((last.x - first.x) * 1000) / elapsedMs;
+    let y = ((last.y - first.y) * 1000) / elapsedMs;
+    let speed = Math.hypot(x, y);
+    const speedLimit = Math.max(0, maxSpeed);
+    if (speed > speedLimit) {
+      const scale = speedLimit / speed;
+      x *= scale;
+      y *= scale;
+      speed = speedLimit;
+    }
+    return { x, y, speed };
+  }
+
+  function decelerateVelocity({ x, y }, decelerationPxPerSecond2, deltaMs) {
+    const speed = Math.hypot(x, y);
+    const nextSpeed = Math.max(
+      0,
+      speed - (decelerationPxPerSecond2 * deltaMs) / 1000,
+    );
+    if (speed === 0 || nextSpeed === 0) {
+      return { x: 0, y: 0, speed: 0 };
+    }
+    const scale = nextSpeed / speed;
+    return {
+      x: x * scale,
+      y: y * scale,
+      speed: nextSpeed,
+    };
+  }
+
+  function reflectVelocity({ x, y }, hitX, hitY, retention = 0.7) {
+    const reflectedX = hitX ? -x * retention : x;
+    const reflectedY = hitY ? -y * retention : y;
+    return {
+      x: reflectedX,
+      y: reflectedY,
+      speed: Math.hypot(reflectedX, reflectedY),
+    };
+  }
+
+  function shortestAngleDelta(from, to) {
+    const fullTurn = Math.PI * 2;
+    let delta = (to - from) % fullTurn;
+    if (delta > Math.PI) delta -= fullTurn;
+    if (delta < -Math.PI) delta += fullTurn;
+    return delta;
+  }
+
   class PausableTimer {
     constructor(callback, now = () => performance.now()) {
       this.callback = callback;
@@ -216,11 +307,16 @@
     StableValueTracker,
     candidatesOutsideRecent,
     chooseGifLoopCount,
+    decelerateVelocity,
+    estimateReleaseVelocity,
     pickUniform,
     pickWeighted,
     pickWithRecent,
     pushRecent,
     randomBetween,
     randomInteger,
+    reflectVelocity,
+    shortestAngleDelta,
+    validCycleCounts,
   };
 });
