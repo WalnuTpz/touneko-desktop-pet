@@ -7,6 +7,8 @@
     root.PetCore = api;
   }
 })(typeof globalThis !== "undefined" ? globalThis : this, function createPetCore() {
+  const THROW_MAX_SPEED = 3000;
+
   function randomBetween(min, max, random = Math.random) {
     return min + random() * (max - min);
   }
@@ -125,7 +127,11 @@
     return counts;
   }
 
-  function estimateReleaseVelocity(samples, windowMs = 120, maxSpeed = 2400) {
+  function estimateReleaseVelocity(
+    samples,
+    windowMs = 120,
+    maxSpeed = THROW_MAX_SPEED,
+  ) {
     const validSamples = samples.filter(
       (sample) =>
         sample &&
@@ -305,6 +311,7 @@
   return {
     PausableTimer,
     StableValueTracker,
+    THROW_MAX_SPEED,
     candidatesOutsideRecent,
     chooseGifLoopCount,
     decelerateVelocity,

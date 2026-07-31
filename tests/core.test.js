@@ -1,6 +1,7 @@
 const assert = require("node:assert/strict");
 const {
   StableValueTracker,
+  THROW_MAX_SPEED,
   candidatesOutsideRecent,
   chooseGifLoopCount,
   decelerateVelocity,
@@ -13,6 +14,8 @@ const {
   shortestAngleDelta,
   validCycleCounts,
 } = require("../src/core");
+
+assert.equal(THROW_MAX_SPEED, 3000);
 
 function sequenceRandom(values) {
   let index = 0;
@@ -104,7 +107,7 @@ const cappedVelocity = estimateReleaseVelocity([
   { x: 0, y: 0, time: 0 },
   { x: 300, y: 400, time: 100 },
 ]);
-assert.deepEqual(cappedVelocity, { x: 1440, y: 1920, speed: 2400 });
+assert.deepEqual(cappedVelocity, { x: 1800, y: 2400, speed: 3000 });
 assert.deepEqual(estimateReleaseVelocity([]), { x: 0, y: 0, speed: 0 });
 assert.deepEqual(
   estimateReleaseVelocity([
