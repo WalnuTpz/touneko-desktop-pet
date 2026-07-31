@@ -4,14 +4,21 @@ const speechBubble = document.querySelector("#speech-bubble");
 const {
   PausableTimer,
   chooseGifLoopCount,
+  decelerateVelocity,
+  estimateReleaseVelocity,
   pickUniform,
+  pickWeighted,
   pickWithRecent,
   pushRecent,
   randomBetween,
+  reflectVelocity,
+  shortestAngleDelta,
+  validCycleCounts,
 } = window.PetCore;
 const {
   bubbleMessageForAction,
   dialogueForAsset,
+  normalizeAssetName,
   openingDialogueForLaunch,
 } = window.PetDialogue;
 
@@ -23,8 +30,52 @@ const DOUBLE_CLICK_DELAY_MS = 280;
 const DRAG_THRESHOLD = 5;
 const BASELINE_MARGIN = 18;
 const POINTER_POLL_INTERVAL_MS = 80;
+const PLAY_POINTER_POLL_INTERVAL_MS = 50;
 const PET_SHAPE_PADDING = 8;
 const BUBBLE_GAP = 17;
+const THROW_TRIGGER_SPEED = 900;
+const THROW_MAX_SPEED = 2400;
+const THROW_DECELERATION = 700;
+const THROW_STOP_SPEED = 60;
+const THROW_BOUNCE_RETENTION = 0.7;
+const PLAY_DURATION_MS = 90_000;
+const PLAY_APPROACH_START_DISTANCE = 260;
+const PLAY_APPROACH_STOP_DISTANCE = 160;
+const PLAY_SWAT_DISTANCE = 100;
+const PLAY_SWAT_DURATION_MS = 1200;
+const PLAY_SWAT_COOLDOWN_MS = 4000;
+const PLAY_ESCAPE_DISTANCE = 220;
+const PLAY_ESCAPE_APPROACH_SPEED = 900;
+const PLAY_ESCAPE_DURATION_MS = 1200;
+const PLAY_ESCAPE_COOLDOWN_MS = 3000;
+const PLAY_CIRCLE_MIN_RADIUS = 80;
+const PLAY_CIRCLE_MAX_RADIUS = 260;
+const PLAY_CIRCLE_WINDOW_MS = 3000;
+const PLAY_CIRCLE_ANGLE = (300 * Math.PI) / 180;
+const PLAY_CIRCLE_DURATION_MS = 2000;
+const PLAY_CIRCLE_COOLDOWN_MS = 6000;
+const PLAY_CHASE_MIN_DELAY_MS = 10_000;
+const PLAY_CHASE_MAX_DELAY_MS = 16_000;
+const PLAY_CHASE_MIN_DURATION_MS = 2000;
+const PLAY_CHASE_MAX_DURATION_MS = 4000;
+const PLAY_CHASE_STOP_DISTANCE = 80;
+const POINTER_SLOW_SPEED = 180;
+const PERSONALITY_PROFILES = Object.freeze({
+  quiet: Object.freeze({
+    dailyDelayMs: Object.freeze({ min: 35_000, max: 50_000 }),
+    actionProbability: 0.85,
+  }),
+  default: Object.freeze({
+    dailyDelayMs: Object.freeze({ min: 20_000, max: 30_000 }),
+    actionProbability: 0.66,
+  }),
+  active: Object.freeze({
+    dailyDelayMs: Object.freeze({ min: 10_000, max: 18_000 }),
+    actionProbability: 0.55,
+  }),
+});
+const SLEEP_ACTION_NAMES = new Set(["吃饱睡", "趴2", "睡", "躺椅"]);
+const WORK_ACTION_NAMES = new Set(["吊水", "写字", "看书"]);
 
 let manifest = null;
 let assets = null;
@@ -45,6 +96,7 @@ let pointerPollStopped = false;
 let bubbleShapeReleaseTimer = null;
 let hoverAnchor = null;
 const gifFrameCache = new Map();
+const staticFrameCache = new Map();
 
 const hitCanvas = document.createElement("canvas");
 const hitContext = hitCanvas.getContext("2d", { willReadFrequently: true });
@@ -78,6 +130,36 @@ function primeGifFrames(assetId) {
   return promise;
 }
 
+function primeStaticFrame(assetId) {
+  if (staticFrameCache.has(assetId)) {
+    return staticFrameCache.get(assetId).promise;
+  }
+  const image = new Image();
+  image.decoding = "async";
+  image.loading = "eager";
+  image.src = assetUrl(assets[assetId].frames[0].file);
+  const promise = image.decode().catch((error) => {
+    staticFrameCache.delete(assetId);
+    throw error;
+  });
+  staticFrameCache.set(assetId, { image, promise });
+  return promise;
+}
+
+function primeMovementAnimations() {
+  const tasks = [];
+  for (const behavior of Object.values(manifest.movement)) {
+    if (behavior.animation.type === "gif") {
+      tasks.push(primeGifFrames(behavior.animation.asset));
+    } else {
+      for (const frame of behavior.animation.frames) {
+        tasks.push(primeStaticFrame(frame.asset));
+      }
+    }
+  }
+  return Promise.all(tasks);
+}
+
 function currentAsset() {
   return state?.currentAssetId ? assets[state.currentAssetId] : null;
 }
@@ -105,6 +187,16 @@ function setFacing(value) {
   updateGeometry();
 }
 
+function setVerticalFacing(value) {
+  state.facingY = value < 0 ? -1 : 1;
+  petImage.style.setProperty("--facing-y", String(state.facingY));
+  updateGeometry();
+}
+
+function resetVerticalFacing() {
+  if (state.facingY !== 1) setVerticalFacing(1);
+}
+
 function toggleFacing() {
   setFacing(-state.facing);
 }
@@ -123,6 +215,10 @@ function geometryFor(asset, frame) {
     state.facing > 0
       ? sourceBounds.x
       : asset.canvas.width - sourceBounds.x - sourceBounds.width;
+  const sourceY =
+    state.facingY > 0
+      ? sourceBounds.y
+      : asset.canvas.height - sourceBounds.y - sourceBounds.height;
   const padding = Number(asset.collisionPadding) || 0;
   return {
     scale,
@@ -137,7 +233,7 @@ function geometryFor(asset, frame) {
     },
     collision: {
       x: imageLeft + sourceX * scale - padding,
-      y: imageTop + sourceBounds.y * scale - padding,
+      y: imageTop + sourceY * scale - padding,
       width: sourceBounds.width * scale + padding * 2,
       height: sourceBounds.height * scale + padding * 2,
     },
@@ -251,9 +347,7 @@ petImage.addEventListener("load", () => {
     window.desktopPet.reportReady();
   }
   if (lastPointerPosition && !pointerState) {
-    queueMicrotask(() =>
-      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y),
-    );
+    queueMicrotask(() => updatePointerPosition(lastPointerPosition));
   }
 });
 
@@ -273,9 +367,12 @@ function hitTestCanvas(
 ) {
   if (!canvas.width || !canvas.height) return false;
   let x = clientX - geometry.imageLeft;
-  const y = clientY - geometry.imageTop;
+  let y = clientY - geometry.imageTop;
   if (state.facing < 0) {
     x = geometry.imageWidth - x;
+  }
+  if (state.facingY < 0) {
+    y = geometry.imageHeight - y;
   }
   if (
     x < -tolerance ||
@@ -474,6 +571,127 @@ class GifPlayer {
   }
 }
 
+class SequencePlayer {
+  constructor() {
+    this.frames = [];
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.targetLoops = 1;
+    this.remainingMs = 0;
+    this.startedAt = 0;
+    this.timeout = null;
+    this.paused = false;
+    this.onComplete = null;
+    this.token = 0;
+  }
+
+  start(frames, targetLoops = Infinity, onComplete = null) {
+    this.stop();
+    this.frames = frames;
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.targetLoops = Math.max(1, targetLoops);
+    this.onComplete = onComplete;
+    this.token += 1;
+    renderFrame(frames[0].asset, 0);
+    this.remainingMs = frames[0].durationMs;
+    this.#arm(this.token);
+  }
+
+  #arm(token) {
+    this.paused = false;
+    this.startedAt = performance.now();
+    this.timeout = setTimeout(() => this.#advance(token), this.remainingMs);
+  }
+
+  #advance(token) {
+    if (token !== this.token || this.frames.length === 0) return;
+    this.timeout = null;
+    this.frameIndex += 1;
+    if (this.frameIndex >= this.frames.length) {
+      this.frameIndex = 0;
+      this.completedLoops += 1;
+      if (this.completedLoops >= this.targetLoops) {
+        const callback = this.onComplete;
+        this.stop();
+        callback?.();
+        return;
+      }
+    }
+    const frame = this.frames[this.frameIndex];
+    renderFrame(frame.asset, 0);
+    this.remainingMs = frame.durationMs;
+    this.#arm(token);
+  }
+
+  pause() {
+    if (this.frames.length === 0 || this.paused) return;
+    clearTimeout(this.timeout);
+    this.timeout = null;
+    this.remainingMs = Math.max(
+      0,
+      this.remainingMs - (performance.now() - this.startedAt),
+    );
+    this.paused = true;
+  }
+
+  resume() {
+    if (this.frames.length === 0 || !this.paused) return;
+    this.#arm(this.token);
+  }
+
+  stop() {
+    clearTimeout(this.timeout);
+    this.timeout = null;
+    this.frames = [];
+    this.frameIndex = 0;
+    this.completedLoops = 0;
+    this.remainingMs = 0;
+    this.paused = false;
+    this.onComplete = null;
+    this.token += 1;
+  }
+
+  isActive() {
+    return this.frames.length > 0;
+  }
+}
+
+function animationCycleDuration(animation) {
+  if (animation.type === "gif") {
+    return assets[animation.asset].loopDurationMs;
+  }
+  return animation.frames.reduce(
+    (total, frame) => total + frame.durationMs,
+    0,
+  );
+}
+
+function startMotionAnimation(animation, loops = Infinity, onComplete = null) {
+  state.gifPlayer.stop();
+  state.sequencePlayer.stop();
+  if (animation.type === "gif") {
+    state.gifPlayer.start(animation.asset, loops, onComplete);
+  } else {
+    state.sequencePlayer.start(animation.frames, loops, onComplete);
+  }
+}
+
+function pauseMotionAnimation() {
+  state.gifPlayer.pause();
+  state.sequencePlayer.pause();
+}
+
+function resumeMotionAnimation() {
+  state.gifPlayer.resume();
+  state.sequencePlayer.resume();
+}
+
+function stopMotionAnimation() {
+  state.gifPlayer.stop();
+  state.sequencePlayer.stop();
+}
+
 function cancelMovement() {
   if (!state.movement) return;
   state.movement.token += 1;
@@ -481,6 +699,7 @@ function cancelMovement() {
     cancelAnimationFrame(state.movement.raf);
   }
   state.movement = null;
+  stopMotionAnimation();
 }
 
 function bubbleIsPresent() {
@@ -496,58 +715,29 @@ function bubbleOccupiesShape() {
 
 function beginDragVisual() {
   if (state.mode === "dragging" || !manifest.dragAsset) return;
-  const movement = state.movement;
-  state.dragSnapshot = {
-    mode: state.mode,
-    assetId: state.currentAssetId,
-    frameIndex: state.currentFrameIndex,
-    resumeDailyTimer: state.dailyTimer.running,
-    resumeActionTimer: state.actionTimer.running,
-    resumeHoverLeaveTimer: state.hoverLeaveTimer.running,
-    resumeBubbleTimer: state.bubbleTimer.running,
-    resumeGif: state.gifPlayer.isActive() && !state.gifPlayer.paused,
-    resumeMovement: Boolean(movement),
-  };
-  state.dailyTimer.pause();
-  state.actionTimer.pause();
-  state.hoverLeaveTimer.pause();
-  state.bubbleTimer.pause();
-  state.gifPlayer.pause();
-  if (movement) {
-    movement.token += 1;
-    if (movement.raf !== null) {
-      cancelAnimationFrame(movement.raf);
-      movement.raf = null;
-    }
-    movement.lastTimestamp = null;
-  }
+  state.dragContext = { fromPlay: Boolean(state.play) };
+  state.dailyTimer.cancel();
+  state.actionTimer.cancel();
+  state.hoverLeaveTimer.cancel();
+  state.bubbleTimer.cancel();
+  state.gifPlayer.stop();
+  state.sequencePlayer.stop();
+  cancelMovement();
+  state.playReactionTimer.cancel();
+  state.playChaseAttemptTimer.cancel();
+  state.pendingClick = null;
+  clearTimeout(clickTimer);
+  clickTimer = null;
+  hideBubble(true);
+  hoverAnchor = null;
   setMode("dragging");
   stage.classList.add("dragging");
+  resetVerticalFacing();
   renderFrame(manifest.dragAsset, 0);
 }
 
 function endDragVisual() {
-  const snapshot = state.dragSnapshot;
-  if (!snapshot) {
-    stage.classList.remove("dragging");
-    return;
-  }
-  state.dragSnapshot = null;
   stage.classList.remove("dragging");
-  setMode(snapshot.mode);
-  renderFrame(snapshot.assetId, snapshot.frameIndex);
-  if (state.fullscreenPaused) return;
-  if (snapshot.resumeDailyTimer && !state.manualPaused) {
-    state.dailyTimer.resume();
-  }
-  if (snapshot.resumeActionTimer) state.actionTimer.resume();
-  if (snapshot.resumeHoverLeaveTimer) state.hoverLeaveTimer.resume();
-  if (snapshot.resumeBubbleTimer) state.bubbleTimer.resume();
-  if (snapshot.resumeGif) state.gifPlayer.resume();
-  if (snapshot.resumeMovement && state.movement) {
-    state.movement.lastTimestamp = null;
-    scheduleMovementFrame(state.movement);
-  }
 }
 
 function releaseBubbleShape() {
@@ -610,6 +800,7 @@ function stopCurrent({ clearPending = false } = {}) {
   state.hoverLeaveTimer.cancel();
   state.bubbleTimer.cancel();
   state.gifPlayer.stop();
+  state.sequencePlayer.stop();
   cancelMovement();
   hideBubble(true);
   hoverAnchor = null;
@@ -628,10 +819,26 @@ function rememberAsset(assetId) {
   );
 }
 
+function environmentPreference() {
+  if (!state.environmentAwareness) return null;
+  if (state.environment.workBias) return "work";
+  if (state.environment.night || state.environment.idle) return "sleep";
+  return null;
+}
+
+function actionEnvironmentWeight(assetId) {
+  const preference = environmentPreference();
+  const name = normalizeAssetName(assets[assetId].name);
+  if (preference === "work" && WORK_ACTION_NAMES.has(name)) return 3;
+  if (preference === "sleep" && SLEEP_ACTION_NAMES.has(name)) return 3;
+  return 1;
+}
+
 function pickAction(trigger) {
   const pool =
     trigger === "double-click" ? manifest.gifActions : manifest.actions;
   const weight = (assetId) => {
+    if (trigger === "automatic") return actionEnvironmentWeight(assetId);
     if (trigger !== "single-click") return 1;
     return assets[assetId].kind === "static" ? 2 : 1;
   };
@@ -644,23 +851,53 @@ function pickAction(trigger) {
   );
 }
 
+function pickDaily() {
+  const preference = environmentPreference();
+  return pickWeighted(manifest.daily, (entry) => {
+    if (preference === "work" && entry.id === "daily-3") return 3;
+    if (preference === "sleep" && entry.id === "daily-7") return 3;
+    return 1;
+  });
+}
+
+function currentPersonality() {
+  return PERSONALITY_PROFILES[state.personality];
+}
+
+function startDailyTimer() {
+  const delayRange = currentPersonality().dailyDelayMs;
+  state.dailyTimer.start(randomBetween(delayRange.min, delayRange.max));
+  if (
+    state.manualPaused ||
+    state.fullscreenPaused ||
+    state.mode === "hover"
+  ) {
+    state.dailyTimer.pause();
+  }
+}
+
+function stopPlaySession(report = true) {
+  if (!state.play) return;
+  state.playTimer.cancel();
+  state.playReactionTimer.cancel();
+  state.playChaseAttemptTimer.cancel();
+  state.play = null;
+  if (report) window.desktopPet.reportPlaying(false);
+}
+
 function enterDaily() {
   stopCurrent();
+  stopPlaySession();
+  state.dragContext = null;
+  resetVerticalFacing();
   setMode("daily");
   state.dailyCycle += 1;
   stage.dataset.dailyCycle = String(state.dailyCycle);
   stage.dataset.behaviorTrigger = "";
-  state.currentDaily = pickUniform(manifest.daily);
+  state.currentDaily = pickDaily();
   state.currentHoverId = null;
   renderFrame(state.currentDaily.idle, 0);
-  const delay = randomBetween(
-    manifest.rules.dailyDelayMs.min,
-    manifest.rules.dailyDelayMs.max,
-  );
-  state.dailyTimer.start(delay);
-  if (state.manualPaused || state.fullscreenPaused) {
-    state.dailyTimer.pause();
-  }
+  startDailyTimer();
 }
 
 function enterHover() {
@@ -701,6 +938,8 @@ function startAction(assetId, trigger = "automatic") {
     return;
   }
   stopCurrent();
+  stopPlaySession();
+  resetVerticalFacing();
   rememberAsset(assetId);
   const asset = assets[assetId];
   stage.dataset.behaviorTrigger = trigger;
@@ -738,7 +977,17 @@ function executeClickIntent(kind) {
 }
 
 function queueOrExecuteClick(kind) {
-  if (state.mode === "hidden" || state.fullscreenPaused) return;
+  if (
+    state.mode === "hidden" ||
+    state.mode === "playing" ||
+    state.mode.startsWith("play-") ||
+    state.mode === "throwing" ||
+    state.mode === "landing" ||
+    state.mode === "dragging" ||
+    state.fullscreenPaused
+  ) {
+    return;
+  }
   if (state.mode === "action-gif" && state.gifPlayer.isActive()) {
     if (kind === "double" || state.pendingClick !== "double") {
       state.pendingClick = kind;
@@ -761,6 +1010,27 @@ function scheduleMovementFrame(movement) {
   );
 }
 
+function integerMovementDelta(movement, desiredX, desiredY) {
+  movement.remainder.x += desiredX;
+  movement.remainder.y += desiredY;
+  const x = Math.trunc(movement.remainder.x);
+  const y = Math.trunc(movement.remainder.y);
+  movement.remainder.x -= x;
+  movement.remainder.y -= y;
+  return { x, y };
+}
+
+function setMovementFacing(direction, sourceFacing) {
+  const sourceDirection = sourceFacing === "left" ? -1 : 1;
+  setFacing(direction * sourceDirection);
+}
+
+function finishAutonomousMovement(movement) {
+  if (state.movement !== movement || state.mode !== "movement") return;
+  cancelMovement();
+  enterDaily();
+}
+
 async function advanceMovement(movement, timestamp) {
   if (state.movement !== movement || movement.token !== state.movement.token) return;
   movement.raf = null;
@@ -772,18 +1042,27 @@ async function advanceMovement(movement, timestamp) {
   }
   const elapsed = Math.min(100, Math.max(0, timestamp - movement.lastTimestamp));
   movement.lastTimestamp = timestamp;
-  movement.remainingMs -= elapsed;
-  if (movement.remainingMs <= 0) {
-    cancelMovement();
-    enterDaily();
+
+  if (movement.kind === "throw") {
+    await advanceThrow(movement, elapsed);
+    return;
+  }
+
+  if (movement.kind.startsWith("play-")) {
+    await advancePlayMovement(movement, elapsed);
     return;
   }
 
   const distance = (movement.speed * elapsed) / 1000;
-  const delta =
+  const desired =
     movement.axis === "horizontal"
       ? { x: movement.direction * distance, y: 0 }
       : { x: 0, y: movement.direction * distance };
+  const delta = integerMovementDelta(movement, desired.x, desired.y);
+  if (delta.x === 0 && delta.y === 0) {
+    scheduleMovementFrame(movement);
+    return;
+  }
   const token = movement.token;
   const result = await window.desktopPet.moveBy(delta);
   if (
@@ -794,9 +1073,11 @@ async function advanceMovement(movement, timestamp) {
     return;
   }
   if (movement.axis === "horizontal" && result.hitX) {
+    movement.remainder.x = 0;
     movement.direction *= -1;
-    toggleFacing();
+    setMovementFacing(movement.direction, movement.sourceFacing);
   } else if (movement.axis === "vertical" && result.hitY) {
+    movement.remainder.y = 0;
     movement.direction *= -1;
   }
   scheduleMovementFrame(movement);
@@ -804,43 +1085,50 @@ async function advanceMovement(movement, timestamp) {
 
 function startRandomMovement(trigger = "automatic") {
   const candidates = movementEntries();
-  const allowedIds = pickWithRecent(
-    candidates.map((entry) => entry.asset),
-    state.recent,
-    () => 1,
-    Math.random,
-    manifest.rules.recentLimit,
-  );
-  const selected =
-    candidates.find((entry) => entry.asset === allowedIds) ||
-    pickUniform(candidates);
+  const selected = pickUniform(candidates);
   if (!selected) {
     enterDaily();
     return;
   }
 
   stopCurrent();
-  rememberAsset(selected.asset);
+  stopPlaySession();
+  resetVerticalFacing();
   setMode("movement");
   stage.dataset.behaviorTrigger = trigger;
-  renderFrame(selected.asset, 0);
-  const movement = {
-    name: selected.name,
-    assetId: selected.asset,
-    speed: selected.speed,
-    axis: Math.random() < 0.5 ? "horizontal" : "vertical",
-    direction: Math.random() < 0.5 ? -1 : 1,
-    remainingMs: randomBetween(
+  const cycleDurationMs = animationCycleDuration(selected.animation);
+  const cycleCount = pickUniform(
+    validCycleCounts(
+      cycleDurationMs,
       manifest.rules.movementDurationMs.min,
       manifest.rules.movementDurationMs.max,
     ),
+  );
+  const movement = {
+    kind: "autonomous",
+    name: selected.name,
+    speed: selected.speed,
+    sourceFacing: selected.sourceFacing,
+    axis: pickUniform(selected.axes),
+    direction: Math.random() < 0.5 ? -1 : 1,
+    cycleCount,
+    durationMs: cycleDurationMs * cycleCount,
     lastTimestamp: null,
     raf: null,
+    remainder: { x: 0, y: 0 },
     token: 1,
   };
+  if (movement.axis === "horizontal") {
+    setMovementFacing(movement.direction, movement.sourceFacing);
+  }
   state.movement = movement;
+  startMotionAnimation(selected.animation, cycleCount, () =>
+    finishAutonomousMovement(movement),
+  );
   if (!state.fullscreenPaused) {
     scheduleMovementFrame(movement);
+  } else {
+    pauseMotionAnimation();
   }
 }
 
@@ -848,22 +1136,432 @@ function automaticTrigger() {
   if (state.manualPaused || state.fullscreenPaused || state.mode !== "daily") {
     return;
   }
-  if (Math.random() < manifest.rules.automaticActionProbability) {
+  if (Math.random() < currentPersonality().actionProbability) {
     startAction(pickAction("automatic"), "automatic");
   } else {
     startRandomMovement("automatic");
   }
 }
 
+function setThrowFacing(velocity) {
+  if (velocity.x !== 0) setFacing(velocity.x < 0 ? -1 : 1);
+  if (velocity.y !== 0) setVerticalFacing(velocity.y < 0 ? 1 : -1);
+}
+
+function startThrow(velocity) {
+  stopCurrent({ clearPending: true });
+  stopPlaySession();
+  setMode("throwing");
+  stage.dataset.behaviorTrigger = "throw";
+  renderFrame(manifest.throwBehavior.asset, 0);
+  setThrowFacing(velocity);
+  const movement = {
+    kind: "throw",
+    velocity: { x: velocity.x, y: velocity.y, speed: velocity.speed },
+    lastTimestamp: null,
+    raf: null,
+    remainder: { x: 0, y: 0 },
+    token: 1,
+  };
+  state.movement = movement;
+  if (!state.fullscreenPaused) scheduleMovementFrame(movement);
+}
+
+function finishThrow(movement) {
+  if (state.movement !== movement) return;
+  cancelMovement();
+  resetVerticalFacing();
+  const assetId = pickWithRecent(
+    manifest.throwBehavior.landingActions,
+    state.recent,
+    () => 1,
+    Math.random,
+    manifest.rules.recentLimit,
+  );
+  rememberAsset(assetId);
+  setMode("landing");
+  stage.dataset.behaviorTrigger = "throw-landing";
+  renderFrame(assetId, 0);
+  state.actionTimer.start(
+    randomBetween(
+      manifest.rules.staticDurationMs.min,
+      manifest.rules.staticDurationMs.max,
+    ),
+  );
+  if (state.fullscreenPaused) state.actionTimer.pause();
+}
+
+async function advanceThrow(movement, elapsedMs) {
+  const distanceScale = elapsedMs / 1000;
+  const token = movement.token;
+  const delta = integerMovementDelta(
+    movement,
+    movement.velocity.x * distanceScale,
+    movement.velocity.y * distanceScale,
+  );
+  const result =
+    delta.x === 0 && delta.y === 0
+      ? { hitX: 0, hitY: 0 }
+      : await window.desktopPet.moveBy(delta);
+  if (state.movement !== movement || movement.token !== token) return;
+  if (result.hitX) movement.remainder.x = 0;
+  if (result.hitY) movement.remainder.y = 0;
+  const reflected = reflectVelocity(
+    movement.velocity,
+    result.hitX,
+    result.hitY,
+    THROW_BOUNCE_RETENTION,
+  );
+  movement.velocity = decelerateVelocity(
+    reflected,
+    THROW_DECELERATION,
+    elapsedMs,
+  );
+  setThrowFacing(movement.velocity);
+  if (movement.velocity.speed < THROW_STOP_SPEED) {
+    finishThrow(movement);
+    return;
+  }
+  scheduleMovementFrame(movement);
+}
+
+function petCenter() {
+  const asset = currentAsset();
+  const frame = currentFrame();
+  const collision = geometryFor(asset, frame).collision;
+  return {
+    x: collision.x + collision.width / 2,
+    y: collision.y + collision.height / 2,
+  };
+}
+
+function schedulePlayChaseAttempt() {
+  if (!state.play) return;
+  state.playChaseAttemptTimer.start(
+    randomBetween(
+      PLAY_CHASE_MIN_DELAY_MS,
+      PLAY_CHASE_MAX_DELAY_MS,
+    ),
+  );
+}
+
+function renderPlayIdle() {
+  setMode("playing");
+  resetVerticalFacing();
+  if (!state.currentDaily) state.currentDaily = pickDaily();
+  renderFrame(state.currentDaily.idle, 0);
+}
+
+function resumePlayIdle() {
+  if (!state.play) return;
+  if (state.play.expired) {
+    enterDaily();
+    return;
+  }
+  cancelMovement();
+  state.playReactionTimer.cancel();
+  renderPlayIdle();
+  schedulePlayChaseAttempt();
+}
+
+function onPlayExpired() {
+  if (!state.play) return;
+  if (state.mode === "dragging" && state.dragContext?.fromPlay) {
+    state.play.expired = true;
+    return;
+  }
+  enterDaily();
+}
+
+function startPlay(source = "pet") {
+  if (
+    state.fullscreenPaused ||
+    state.play ||
+    state.mode === "hidden" ||
+    state.mode === "throwing" ||
+    (state.mode === "landing" && source !== "pet")
+  ) {
+    return;
+  }
+  stopCurrent({ clearPending: true });
+  state.currentDaily = pickDaily();
+  state.currentHoverId = null;
+  state.play = {
+    expired: false,
+    cursor: null,
+    lastSample: null,
+    circleSamples: [],
+    cooldownUntil: {
+      escape: 0,
+      circle: 0,
+      swat: 0,
+    },
+  };
+  stage.dataset.behaviorTrigger = "play";
+  renderPlayIdle();
+  state.playTimer.start(PLAY_DURATION_MS);
+  schedulePlayChaseAttempt();
+  schedulePointerPoll();
+  window.desktopPet.reportPlaying(true);
+}
+
+function startPlayReaction(mode, assetId, durationMs) {
+  cancelMovement();
+  state.playReactionTimer.cancel();
+  state.playChaseAttemptTimer.cancel();
+  setMode(mode);
+  resetVerticalFacing();
+  renderFrame(assetId, 0);
+  state.playReactionTimer.start(durationMs);
+}
+
+function startPlayMotion(kind, movementName, speed, options = {}) {
+  cancelMovement();
+  state.playReactionTimer.cancel();
+  if (kind !== "play-approach") {
+    state.playChaseAttemptTimer.cancel();
+  }
+  const behavior = manifest.movement[movementName];
+  const movement = {
+    kind,
+    speed,
+    sourceFacing: behavior.sourceFacing,
+    direction: options.direction || null,
+    endsAt: options.endsAt || null,
+    stopDistance: options.stopDistance || null,
+    lastTimestamp: null,
+    raf: null,
+    remainder: { x: 0, y: 0 },
+    token: 1,
+  };
+  state.movement = movement;
+  setMode(kind);
+  startMotionAnimation(behavior.animation);
+  if (movement.direction?.x) {
+    setMovementFacing(
+      movement.direction.x < 0 ? -1 : 1,
+      movement.sourceFacing,
+    );
+  }
+  scheduleMovementFrame(movement);
+}
+
+function startPlayEscape(now, cursor) {
+  const center = petCenter();
+  const deltaX = center.x - cursor.clientX;
+  const deltaY = center.y - cursor.clientY;
+  const length = Math.hypot(deltaX, deltaY) || 1;
+  state.play.cooldownUntil.escape = now + PLAY_ESCAPE_COOLDOWN_MS;
+  startPlayMotion("play-escape", "跑", 120, {
+    direction: { x: deltaX / length, y: deltaY / length },
+    endsAt: now + PLAY_ESCAPE_DURATION_MS,
+  });
+}
+
+function startPlayConfused(now) {
+  state.play.cooldownUntil.circle = now + PLAY_CIRCLE_COOLDOWN_MS;
+  state.play.circleSamples = [];
+  startPlayReaction(
+    "play-confused",
+    manifest.playBehavior.confusedAsset,
+    PLAY_CIRCLE_DURATION_MS,
+  );
+}
+
+function startPlaySwat(now) {
+  state.play.cooldownUntil.swat = now + PLAY_SWAT_COOLDOWN_MS;
+  startPlayReaction(
+    "play-swat",
+    pickUniform(manifest.playBehavior.swatAssets),
+    PLAY_SWAT_DURATION_MS,
+  );
+}
+
+function tryStartPlayChase() {
+  if (!state.play) return;
+  if (state.mode !== "playing" && state.mode !== "play-approach") {
+    schedulePlayChaseAttempt();
+    return;
+  }
+  startPlayMotion("play-chase", "跑", 120, {
+    endsAt:
+      performance.now() +
+      randomBetween(
+        PLAY_CHASE_MIN_DURATION_MS,
+        PLAY_CHASE_MAX_DURATION_MS,
+      ),
+    stopDistance: PLAY_CHASE_STOP_DISTANCE,
+  });
+}
+
+function updateCircleSamples(now, cursor, center, distance) {
+  if (
+    distance < PLAY_CIRCLE_MIN_RADIUS ||
+    distance > PLAY_CIRCLE_MAX_RADIUS
+  ) {
+    state.play.circleSamples = [];
+    return false;
+  }
+  const angle = Math.atan2(cursor.clientY - center.y, cursor.clientX - center.x);
+  const samples = state.play.circleSamples;
+  samples.push({ time: now, angle });
+  while (
+    samples.length > 1 &&
+    samples[0].time < now - PLAY_CIRCLE_WINDOW_MS
+  ) {
+    samples.shift();
+  }
+  let accumulated = 0;
+  for (let index = 1; index < samples.length; index += 1) {
+    accumulated += shortestAngleDelta(
+      samples[index - 1].angle,
+      samples[index].angle,
+    );
+  }
+  return Math.abs(accumulated) >= PLAY_CIRCLE_ANGLE;
+}
+
+function handlePlayPointer(point) {
+  if (!state.play || state.fullscreenPaused) return;
+  const now = performance.now();
+  const center = petCenter();
+  const deltaX = point.clientX - center.x;
+  const deltaY = point.clientY - center.y;
+  const distance = Math.hypot(deltaX, deltaY);
+  const previous = state.play.lastSample;
+  const elapsedSeconds = previous
+    ? Math.max(0.001, (now - previous.time) / 1000)
+    : 0;
+  const cursorSpeed = previous
+    ? Math.hypot(
+        point.screenX - previous.screenX,
+        point.screenY - previous.screenY,
+      ) / elapsedSeconds
+    : 0;
+  const radialApproachSpeed = previous
+    ? (previous.distance - distance) / elapsedSeconds
+    : 0;
+  state.play.cursor = point;
+  state.play.lastSample = {
+    screenX: point.screenX,
+    screenY: point.screenY,
+    distance,
+    time: now,
+  };
+  if (deltaX !== 0 && state.mode !== "play-escape") {
+    const direction = deltaX < 0 ? -1 : 1;
+    if (state.movement?.kind.startsWith("play-")) {
+      setMovementFacing(direction, state.movement.sourceFacing);
+    } else {
+      setFacing(direction);
+    }
+  }
+
+  if (
+    state.mode === "play-swat" ||
+    state.mode === "play-confused" ||
+    state.mode === "play-escape"
+  ) {
+    return;
+  }
+
+  const circled = updateCircleSamples(now, point, center, distance);
+  if (
+    distance <= PLAY_ESCAPE_DISTANCE &&
+    radialApproachSpeed >= PLAY_ESCAPE_APPROACH_SPEED &&
+    now >= state.play.cooldownUntil.escape
+  ) {
+    startPlayEscape(now, point);
+    return;
+  }
+  if (circled && now >= state.play.cooldownUntil.circle) {
+    startPlayConfused(now);
+    return;
+  }
+  if (
+    distance <= PLAY_SWAT_DISTANCE &&
+    cursorSpeed <= POINTER_SLOW_SPEED &&
+    now >= state.play.cooldownUntil.swat
+  ) {
+    startPlaySwat(now);
+    return;
+  }
+  if (state.mode === "play-chase") return;
+  if (distance > PLAY_APPROACH_START_DISTANCE) {
+    if (state.mode !== "play-approach") {
+      startPlayMotion("play-approach", "迈步", 50, {
+        stopDistance: PLAY_APPROACH_STOP_DISTANCE,
+      });
+    }
+  } else if (
+    state.mode === "play-approach" &&
+    distance <= PLAY_APPROACH_STOP_DISTANCE
+  ) {
+    resumePlayIdle();
+  }
+}
+
+async function advancePlayMovement(movement, elapsedMs) {
+  if (!state.play) {
+    cancelMovement();
+    return;
+  }
+  const now = performance.now();
+  if (movement.endsAt && now >= movement.endsAt) {
+    resumePlayIdle();
+    return;
+  }
+
+  let direction = movement.direction;
+  if (!direction) {
+    const cursor = state.play.cursor;
+    if (!cursor) {
+      resumePlayIdle();
+      return;
+    }
+    const center = petCenter();
+    const deltaX = cursor.clientX - center.x;
+    const deltaY = cursor.clientY - center.y;
+    const distance = Math.hypot(deltaX, deltaY);
+    if (distance <= movement.stopDistance) {
+      resumePlayIdle();
+      return;
+    }
+    direction = { x: deltaX / distance, y: deltaY / distance };
+  }
+
+  if (direction.x !== 0) {
+    setMovementFacing(
+      direction.x < 0 ? -1 : 1,
+      movement.sourceFacing,
+    );
+  }
+  const token = movement.token;
+  const distance = (movement.speed * elapsedMs) / 1000;
+  const delta = integerMovementDelta(
+    movement,
+    direction.x * distance,
+    direction.y * distance,
+  );
+  if (delta.x !== 0 || delta.y !== 0) {
+    await window.desktopPet.moveBy(delta);
+  }
+  if (state.movement !== movement || movement.token !== token) return;
+  scheduleMovementFrame(movement);
+}
+
 function pauseForFullscreen() {
   if (state.fullscreenPaused) return;
+  const resetToDaily = Boolean(state.play) || state.mode === "dragging";
   state.fullscreenPaused = true;
-  cancelPointerInteraction();
+  cancelPointerInteraction({ settle: false });
+  if (resetToDaily) enterDaily();
   state.dailyTimer.pause();
   state.actionTimer.pause();
   state.hoverLeaveTimer.pause();
   state.bubbleTimer.pause();
   state.gifPlayer.pause();
+  state.sequencePlayer.pause();
   if (state.movement) {
     state.movement.token += 1;
     if (state.movement.raf !== null) {
@@ -885,8 +1583,14 @@ function resumeFromFullscreen() {
   } else if (state.mode === "action-gif") {
     state.gifPlayer.resume();
   } else if (state.mode === "movement" && state.movement) {
+    resumeMotionAnimation();
     state.movement.lastTimestamp = null;
     scheduleMovementFrame(state.movement);
+  } else if (state.mode === "throwing" && state.movement) {
+    state.movement.lastTimestamp = null;
+    scheduleMovementFrame(state.movement);
+  } else if (state.mode === "landing") {
+    state.actionTimer.resume();
   }
   if (state.mode === "hover") {
     state.hoverLeaveTimer.resume();
@@ -906,6 +1610,11 @@ function setManualPaused(value) {
   }
 }
 
+function setPersonality(value) {
+  state.personality = value;
+  if (state.mode === "daily" || state.mode === "hover") startDailyTimer();
+}
+
 function setUserScale(value) {
   const scale = Number(value);
   if (!manifest.rules.scaleOptions.includes(scale)) return;
@@ -915,8 +1624,10 @@ function setUserScale(value) {
 }
 
 function hideRuntime() {
-  cancelPointerInteraction();
+  cancelPointerInteraction({ settle: false });
   stopCurrent({ clearPending: true });
+  stopPlaySession();
+  resetVerticalFacing();
   setMode("hidden");
   state.currentDaily = null;
   state.currentHoverId = null;
@@ -925,12 +1636,15 @@ function hideRuntime() {
 
 function callBack(payload) {
   stopCurrent({ clearPending: true });
+  stopPlaySession();
   state.recent = [];
   state.facing = 1;
+  state.facingY = 1;
   state.manualPaused = Boolean(payload.paused);
   state.clickThrough = Boolean(payload.clickThrough);
   state.userScale = Number(payload.scale) || 1;
   petImage.style.setProperty("--facing", "1");
+  petImage.style.setProperty("--facing-y", "1");
   enterDaily();
 }
 
@@ -945,8 +1659,24 @@ function handleCommand(payload) {
       stopCurrent({ clearPending: true });
       startRandomMovement("menu");
       break;
+    case "set-playing":
+      if (payload.value) {
+        startPlay(payload.source);
+      } else if (state.play) {
+        enterDaily();
+      }
+      break;
     case "set-paused":
       setManualPaused(payload.value);
+      break;
+    case "set-personality":
+      setPersonality(payload.value);
+      break;
+    case "set-environment-awareness":
+      state.environmentAwareness = Boolean(payload.value);
+      break;
+    case "environment-state":
+      state.environment = payload.environment;
       break;
     case "set-click-through":
       state.clickThrough = Boolean(payload.value);
@@ -985,12 +1715,15 @@ function installSmokeApi(enabled) {
     drawHitCanvas,
     endDragVisual,
     enterDaily,
+    finishThrow,
     geometryFor,
     hitTest,
     hitTestHoverAnchor,
     renderFrame,
     setMode,
     startAction,
+    startPlay,
+    startThrow,
     stopCurrent,
     queueTestSingleClick() {
       clearTimeout(clickTimer);
@@ -1013,8 +1746,8 @@ function installSmokeApi(enabled) {
   });
 }
 
-function updatePointerPosition(clientX, clientY) {
-  if (!state || state.mode === "hidden" || state.clickThrough) {
+function updatePointerPosition(point) {
+  if (!state || state.mode === "hidden") {
     reportPointerRegion(false);
     return;
   }
@@ -1022,14 +1755,29 @@ function updatePointerPosition(clientX, clientY) {
     reportPointerRegion(true);
     return;
   }
+  if (state.mode === "throwing") {
+    reportPointerRegion(false);
+    return;
+  }
+  if (state.play) {
+    const overPet =
+      !state.clickThrough && hitTest(point.clientX, point.clientY, 0);
+    reportPointerRegion(overPet);
+    handlePlayPointer(point);
+    return;
+  }
+  if (state.clickThrough) {
+    reportPointerRegion(false);
+    return;
+  }
   const tolerance =
     state.mode === "daily" || state.mode === "hover"
       ? manifest.rules.hoverTolerance
       : 0;
   const overPet =
-    hitTest(clientX, clientY, tolerance) ||
+    hitTest(point.clientX, point.clientY, tolerance) ||
     (state.mode === "hover" &&
-      hitTestHoverAnchor(clientX, clientY, tolerance));
+      hitTestHoverAnchor(point.clientX, point.clientY, tolerance));
   reportPointerRegion(overPet);
 
   if (state.mode === "daily" && overPet) {
@@ -1045,11 +1793,12 @@ function updatePointerPosition(clientX, clientY) {
 }
 
 async function pollPointerPosition() {
+  const tracksPlay = Boolean(state?.play);
   if (
     pointerPollInFlight ||
     !state ||
-    (state.mode !== "daily" && state.mode !== "hover") ||
-    state.clickThrough ||
+    (!tracksPlay && state.mode !== "daily" && state.mode !== "hover") ||
+    (!tracksPlay && state.clickThrough) ||
     state.fullscreenPaused
   ) {
     return;
@@ -1059,10 +1808,12 @@ async function pollPointerPosition() {
     const point = await window.desktopPet.getPointerPosition();
     if (!point) return;
     lastPointerPosition = {
-      x: Number(point.clientX),
-      y: Number(point.clientY),
+      clientX: Number(point.clientX),
+      clientY: Number(point.clientY),
+      screenX: Number(point.screenX),
+      screenY: Number(point.screenY),
     };
-    updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y);
+    updatePointerPosition(lastPointerPosition);
     pointerPollWarningShown = false;
   } catch (error) {
     if (!pointerPollWarningShown) {
@@ -1079,18 +1830,28 @@ function schedulePointerPoll() {
   clearTimeout(pointerPollTimer);
   const interactive =
     state &&
-    (state.mode === "daily" || state.mode === "hover") &&
-    !state.clickThrough &&
+    ((state.play && !state.fullscreenPaused) ||
+      ((state.mode === "daily" || state.mode === "hover") &&
+        !state.clickThrough)) &&
     !state.fullscreenPaused;
   pointerPollTimer = setTimeout(async () => {
     await pollPointerPosition();
     schedulePointerPoll();
-  }, interactive ? POINTER_POLL_INTERVAL_MS : 400);
+  }, state?.play
+    ? PLAY_POINTER_POLL_INTERVAL_MS
+    : interactive
+      ? POINTER_POLL_INTERVAL_MS
+      : 400);
 }
 
 window.addEventListener("mousemove", (event) => {
-  lastPointerPosition = { x: event.clientX, y: event.clientY };
-  updatePointerPosition(event.clientX, event.clientY);
+  lastPointerPosition = {
+    clientX: event.clientX,
+    clientY: event.clientY,
+    screenX: event.screenX,
+    screenY: event.screenY,
+  };
+  updatePointerPosition(lastPointerPosition);
 });
 window.addEventListener("mouseleave", () => {
   if (!pointerState) reportPointerRegion(false);
@@ -1101,14 +1862,23 @@ window.addEventListener("mouseleave", () => {
 });
 
 stage.addEventListener("pointerdown", (event) => {
-  if (event.button !== 0 || state.clickThrough || !hitTest(event.clientX, event.clientY, 0)) {
+  if (
+    event.button !== 0 ||
+    state.clickThrough ||
+    state.fullscreenPaused ||
+    state.mode === "throwing" ||
+    state.mode === "landing" ||
+    !hitTest(event.clientX, event.clientY, 0)
+  ) {
     return;
   }
+  const now = performance.now();
   pointerState = {
     id: event.pointerId,
     startX: event.screenX,
     startY: event.screenY,
     moved: false,
+    samples: [{ x: event.screenX, y: event.screenY, time: now }],
   };
   stage.setPointerCapture(event.pointerId);
   window.desktopPet.dragStart({
@@ -1119,6 +1889,15 @@ stage.addEventListener("pointerdown", (event) => {
 
 stage.addEventListener("pointermove", async (event) => {
   if (!pointerState || pointerState.id !== event.pointerId) return;
+  const now = performance.now();
+  pointerState.samples.push({
+    x: event.screenX,
+    y: event.screenY,
+    time: now,
+  });
+  pointerState.samples = pointerState.samples.filter(
+    (sample) => sample.time >= now - 300,
+  );
   const distance = Math.hypot(
     event.screenX - pointerState.startX,
     event.screenY - pointerState.startY,
@@ -1146,42 +1925,71 @@ stage.addEventListener("pointermove", async (event) => {
   if (result?.flipHorizontal) toggleFacing();
 });
 
-function cancelPointerInteraction() {
-  if (!pointerState) {
-    endDragVisual();
-    window.desktopPet.dragEnd();
-    return;
+function settleCancelledDrag(context) {
+  if (context?.fromPlay && state.play && !state.play.expired) {
+    resumePlayIdle();
+  } else {
+    enterDaily();
   }
-  const pointerId = pointerState.id;
+}
+
+function cancelPointerInteraction({ settle = true } = {}) {
+  const interaction = pointerState;
+  if (!interaction) return;
+  const pointerId = interaction.id;
   pointerState = null;
   if (stage.hasPointerCapture(pointerId)) {
     stage.releasePointerCapture(pointerId);
   }
-  endDragVisual();
   window.desktopPet.dragEnd();
+  if (!interaction.moved) return;
+  const context = state.dragContext;
+  state.dragContext = null;
+  endDragVisual();
+  if (settle) settleCancelledDrag(context);
 }
 
 function finishPointer(event) {
   if (!pointerState || pointerState.id !== event.pointerId) return;
-  const moved = pointerState.moved;
+  const interaction = pointerState;
+  const moved = interaction.moved;
   if (moved) {
     suppressClickUntil = Date.now() + 400;
+    interaction.samples.push({
+      x: event.screenX,
+      y: event.screenY,
+      time: performance.now(),
+    });
   }
   pointerState = null;
   if (stage.hasPointerCapture(event.pointerId)) {
     stage.releasePointerCapture(event.pointerId);
   }
-  endDragVisual();
   window.desktopPet.dragEnd();
-  if (lastPointerPosition) {
-    queueMicrotask(() =>
-      updatePointerPosition(lastPointerPosition.x, lastPointerPosition.y),
+  if (moved) {
+    const context = state.dragContext;
+    state.dragContext = null;
+    endDragVisual();
+    const velocity = estimateReleaseVelocity(
+      interaction.samples,
+      120,
+      THROW_MAX_SPEED,
     );
+    if (velocity.speed >= THROW_TRIGGER_SPEED) {
+      startThrow(velocity);
+    } else if (context?.fromPlay && state.play && !state.play.expired) {
+      resumePlayIdle();
+    } else {
+      enterDaily();
+    }
+  }
+  if (lastPointerPosition) {
+    queueMicrotask(() => updatePointerPosition(lastPointerPosition));
   }
 }
 
 stage.addEventListener("pointerup", finishPointer);
-stage.addEventListener("pointercancel", finishPointer);
+stage.addEventListener("pointercancel", () => cancelPointerInteraction());
 stage.addEventListener("lostpointercapture", (event) => {
   if (pointerState?.id === event.pointerId) cancelPointerInteraction();
 });
@@ -1203,7 +2011,13 @@ stage.addEventListener("dblclick", () => {
 });
 
 window.addEventListener("contextmenu", (event) => {
-  if (state.clickThrough || !hitTest(event.clientX, event.clientY, 0)) return;
+  if (
+    state.clickThrough ||
+    state.mode === "throwing" ||
+    !hitTest(event.clientX, event.clientY, 0)
+  ) {
+    return;
+  }
   event.preventDefault();
   window.desktopPet.openMenu();
 });
@@ -1217,6 +2031,7 @@ async function initialize() {
       ? bootstrap.assetBaseUrl
       : DEVELOPMENT_GENERATED_ROOT.href;
   windowSize = bootstrap.window;
+  await primeMovementAnimations();
   state = {
     mode: "starting",
     currentAssetId: null,
@@ -1224,29 +2039,44 @@ async function initialize() {
     currentDaily: null,
     currentHoverId: null,
     facing: 1,
+    facingY: 1,
     recent: [],
     pendingClick: null,
     manualPaused: Boolean(bootstrap.runtime.paused),
     clickThrough: Boolean(bootstrap.runtime.clickThrough),
     userScale: Number(bootstrap.runtime.scale) || 1,
+    personality: bootstrap.runtime.personality,
+    environmentAwareness: Boolean(
+      bootstrap.runtime.environmentAwareness,
+    ),
+    environment: bootstrap.environment,
     fullscreenPaused: false,
     movement: null,
-    dragSnapshot: null,
+    dragContext: null,
+    play: null,
     dailyCycle: 0,
     dailyTimer: null,
     actionTimer: null,
     hoverLeaveTimer: null,
     bubbleTimer: null,
+    playTimer: null,
+    playReactionTimer: null,
+    playChaseAttemptTimer: null,
     gifPlayer: new GifPlayer(),
+    sequencePlayer: new SequencePlayer(),
   };
   state.dailyTimer = new PausableTimer(automaticTrigger);
   state.actionTimer = new PausableTimer(finishAction);
   state.hoverLeaveTimer = new PausableTimer(leaveHover);
   state.bubbleTimer = new PausableTimer(hideBubble);
+  state.playTimer = new PausableTimer(onPlayExpired);
+  state.playReactionTimer = new PausableTimer(resumePlayIdle);
+  state.playChaseAttemptTimer = new PausableTimer(tryStartPlayChase);
   installSmokeApi(Boolean(bootstrap.smokeTest));
   window.desktopPet.onCommand(handleCommand);
   stage.dataset.scale = String(state.userScale);
   setFacing(1);
+  setVerticalFacing(1);
   enterDaily();
   showOpeningBubble();
   schedulePointerPoll();

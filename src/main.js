@@ -5,6 +5,7 @@ const {
   Menu,
   Tray,
   nativeImage,
+  powerMonitor,
   protocol,
   screen,
   session,
@@ -29,6 +30,19 @@ const RESOURCE_HOST = "app";
 const RESOURCE_KEY_SYMBOL = Symbol.for("tangmao.resource-key");
 const FULLSCREEN_HASH_SYMBOL = Symbol.for("tangmao.fullscreen-monitor-hash");
 const PET_SESSION_PARTITION = "tangmao-memory";
+const SETTINGS_FILENAME = "settings.json";
+const PERSONALITY_VALUES = ["quiet", "default", "active"];
+const DEFAULT_SETTINGS = Object.freeze({
+  personality: "default",
+  environmentAwareness: true,
+});
+const ENVIRONMENT_SAMPLE_INTERVAL_MS = 1000;
+const ACTIVE_IDLE_SECONDS = 2;
+const IDLE_THRESHOLD_SECONDS = 600;
+const ACTIVITY_SAMPLE_COUNT = 10;
+const HIGH_ACTIVITY_SAMPLE_COUNT = 8;
+const WORK_BIAS_RETENTION_MS = 30_000;
+const PLAY_DURATION_MS = 90_000;
 
 protocol.registerSchemesAsPrivileged([
   {
@@ -46,6 +60,15 @@ const runtime = {
   paused: false,
   clickThrough: false,
   scale: 1,
+  playing: false,
+  personality: DEFAULT_SETTINGS.personality,
+  environmentAwareness: DEFAULT_SETTINGS.environmentAwareness,
+  environment: {
+    night: false,
+    idle: false,
+    highActivity: false,
+    workBias: false,
+  },
   userHidden: false,
   fullscreenHidden: false,
   pointerOverPet: false,
@@ -70,10 +93,132 @@ let protectedResources = null;
 let petSession = null;
 let fullscreenMonitorExpectedHash = null;
 let smokeReadyTimer = null;
+let environmentSampleTimer = null;
+let workBiasUntil = 0;
+const activitySamples = [];
 const fullscreenStability = new StableValueTracker("");
 
 function generatedPath(...parts) {
   return path.join(__dirname, "..", "assets", "generated", ...parts);
+}
+
+function persistentSettingsPath() {
+  return path.join(app.getPath("userData"), SETTINGS_FILENAME);
+}
+
+function isValidPersistentSettings(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value).sort();
+  return (
+    keys.length === 2 &&
+    keys[0] === "environmentAwareness" &&
+    keys[1] === "personality" &&
+    PERSONALITY_VALUES.includes(value.personality) &&
+    typeof value.environmentAwareness === "boolean"
+  );
+}
+
+function savePersistentSettings() {
+  const outputPath = persistentSettingsPath();
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(
+    outputPath,
+    `${JSON.stringify(
+      {
+        personality: runtime.personality,
+        environmentAwareness: runtime.environmentAwareness,
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
+function loadPersistentSettings() {
+  const inputPath = persistentSettingsPath();
+  let settings;
+
+  if (fs.existsSync(inputPath)) {
+    const source = fs.readFileSync(inputPath, "utf8");
+    try {
+      settings = JSON.parse(source);
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      console.warn("糖猫桌宠设置文件已损坏，已恢复默认设置");
+    }
+    if (settings !== undefined && !isValidPersistentSettings(settings)) {
+      console.warn("糖猫桌宠设置内容无效，已恢复默认设置");
+      settings = undefined;
+    }
+  }
+
+  const resolved = settings || DEFAULT_SETTINGS;
+  runtime.personality = resolved.personality;
+  runtime.environmentAwareness = resolved.environmentAwareness;
+  if (settings === undefined) savePersistentSettings();
+}
+
+function environmentSnapshot() {
+  return { ...runtime.environment };
+}
+
+function sameEnvironment(left, right) {
+  return (
+    left.night === right.night &&
+    left.idle === right.idle &&
+    left.highActivity === right.highActivity &&
+    left.workBias === right.workBias
+  );
+}
+
+function publishEnvironmentState() {
+  sendCommand("environment-state", {
+    environment: environmentSnapshot(),
+  });
+}
+
+function sampleEnvironment() {
+  const now = Date.now();
+  const idleSeconds = powerMonitor.getSystemIdleTime();
+  activitySamples.push(idleSeconds <= ACTIVE_IDLE_SECONDS);
+  if (activitySamples.length > ACTIVITY_SAMPLE_COUNT) {
+    activitySamples.shift();
+  }
+
+  const activeCount = activitySamples.filter(Boolean).length;
+  const highActivity = activeCount >= HIGH_ACTIVITY_SAMPLE_COUNT;
+  if (runtime.environment.highActivity && !highActivity) {
+    workBiasUntil = now + WORK_BIAS_RETENTION_MS;
+  } else if (highActivity) {
+    workBiasUntil = 0;
+  }
+
+  const hour = new Date(now).getHours();
+  const nextEnvironment = {
+    night: hour >= 21 || hour < 8,
+    idle: idleSeconds >= IDLE_THRESHOLD_SECONDS,
+    highActivity,
+    workBias: highActivity || now < workBiasUntil,
+  };
+  if (sameEnvironment(runtime.environment, nextEnvironment)) return;
+  runtime.environment = nextEnvironment;
+  publishEnvironmentState();
+}
+
+function startEnvironmentMonitor() {
+  sampleEnvironment();
+  environmentSampleTimer = setInterval(
+    sampleEnvironment,
+    ENVIRONMENT_SAMPLE_INTERVAL_MS,
+  );
+}
+
+function stopEnvironmentMonitor() {
+  clearInterval(environmentSampleTimer);
+  environmentSampleTimer = null;
 }
 
 function loadManifest() {
@@ -278,11 +423,12 @@ function sendCommand(command, payload = {}) {
 
 function failApplicationStartup(error) {
   console.error("糖猫桌宠启动失败：", error);
-  process.exitCode = 1;
   quitting = true;
   clearTimeout(smokeReadyTimer);
   smokeReadyTimer = null;
-  app.quit();
+  stopEnvironmentMonitor();
+  stopFullscreenMonitor();
+  app.exit(1);
 }
 
 function updateMouseIgnoring() {
@@ -326,7 +472,7 @@ function showWindowIfAllowed() {
 }
 
 function updateMenus() {
-  tray?.setContextMenu(createPetMenu({ includeActions: false }));
+  tray?.setContextMenu(createTrayMenu());
 }
 
 function setPaused(value) {
@@ -350,6 +496,39 @@ function setScale(value) {
   runtime.scale = scale;
   sendCommand("set-scale", { value: scale });
   updateMenus();
+}
+
+function setPersonality(value) {
+  if (!PERSONALITY_VALUES.includes(value)) {
+    throw new TypeError(`未知性格：${value}`);
+  }
+  if (runtime.personality === value) return;
+  runtime.personality = value;
+  savePersistentSettings();
+  sendCommand("set-personality", { value });
+  updateMenus();
+}
+
+function setEnvironmentAwareness(value) {
+  const enabled = Boolean(value);
+  if (runtime.environmentAwareness === enabled) return;
+  runtime.environmentAwareness = enabled;
+  savePersistentSettings();
+  sendCommand("set-environment-awareness", { value: enabled });
+  publishEnvironmentState();
+  updateMenus();
+}
+
+function requestPlaying(value, { fromTray = false } = {}) {
+  const playing = Boolean(value);
+  if (playing && runtime.fullscreenHidden) return;
+  if (playing && fromTray && runtime.userHidden) {
+    callPetBack();
+  }
+  sendCommand("set-playing", {
+    value: playing,
+    source: fromTray ? "tray" : "pet",
+  });
 }
 
 function hideByUser() {
@@ -397,25 +576,75 @@ function scaleSubmenu() {
   }));
 }
 
-function createPetMenu({ includeActions }) {
-  const template = [];
-  if (includeActions) {
-    template.push(
-      {
-        label: "随机动作",
-        click: () => sendCommand("random-action", { interrupt: true }),
-      },
-      {
-        label: "出去走走",
-        click: () => sendCommand("random-movement", { interrupt: true }),
-      },
-      { type: "separator" },
-    );
-  }
-  template.push(
+function playMenuItem(fromTray) {
+  return {
+    label: runtime.playing ? "停止玩耍" : "和糖猫玩耍",
+    enabled: runtime.playing || !runtime.fullscreenHidden,
+    click: () => requestPlaying(!runtime.playing, { fromTray }),
+  };
+}
+
+function personalitySubmenu() {
+  return [
+    { label: "安静", value: "quiet" },
+    { label: "默认", value: "default" },
+    { label: "活泼", value: "active" },
+  ].map(({ label, value }) => ({
+    label,
+    type: "radio",
+    checked: runtime.personality === value,
+    click: () => setPersonality(value),
+  }));
+}
+
+function createPetMenu() {
+  return Menu.buildFromTemplate([
+    {
+      label: "随机动作",
+      click: () => sendCommand("random-action", { interrupt: true }),
+    },
+    {
+      label: "出去走走",
+      click: () => sendCommand("random-movement", { interrupt: true }),
+    },
+    playMenuItem(false),
+    { type: "separator" },
     {
       label: runtime.paused ? "继续活动" : "暂停活动",
       click: () => setPaused(!runtime.paused),
+    },
+    {
+      label: "调整大小",
+      submenu: scaleSubmenu(),
+    },
+    { type: "separator" },
+    {
+      label: "藏起来",
+      click: hideByUser,
+    },
+    {
+      label: "退出",
+      click: quitApplication,
+    },
+  ]);
+}
+
+function createTrayMenu() {
+  return Menu.buildFromTemplate([
+    playMenuItem(true),
+    {
+      label: runtime.paused ? "继续活动" : "暂停活动",
+      click: () => setPaused(!runtime.paused),
+    },
+    {
+      label: "环境感知",
+      type: "checkbox",
+      checked: runtime.environmentAwareness,
+      click: (item) => setEnvironmentAwareness(item.checked),
+    },
+    {
+      label: "性格",
+      submenu: personalitySubmenu(),
     },
     {
       label: "鼠标穿透",
@@ -436,8 +665,7 @@ function createPetMenu({ includeActions }) {
       label: "退出",
       click: quitApplication,
     },
-  );
-  return Menu.buildFromTemplate(template);
+  ]);
 }
 
 function createTray() {
@@ -455,6 +683,7 @@ function createTray() {
 }
 
 function updateFullscreenVisibility() {
+  if (app.commandLine.hasSwitch("smoke-test")) return;
   const shouldHide = activeFullscreenDisplayIds.has(
     String(runtime.currentDisplayId),
   );
@@ -470,6 +699,7 @@ function updateFullscreenVisibility() {
     sendCommand("fullscreen-resume");
     showWindowIfAllowed();
   }
+  updateMenus();
 }
 
 function parseFullscreenLine(line) {
@@ -664,7 +894,11 @@ function registerIpc() {
       paused: runtime.paused,
       clickThrough: runtime.clickThrough,
       scale: runtime.scale,
+      playing: runtime.playing,
+      personality: runtime.personality,
+      environmentAwareness: runtime.environmentAwareness,
     },
+    environment: environmentSnapshot(),
     window: {
       width: WINDOW_WIDTH,
       height: WINDOW_HEIGHT,
@@ -674,11 +908,14 @@ function registerIpc() {
   ipcMain.on("pet:renderer-ready", () => {
     clearTimeout(smokeReadyTimer);
     smokeReadyTimer = null;
+    publishEnvironmentState();
     if (app.commandLine.hasSwitch("smoke-test")) {
       runSmokeTest().catch((error) => {
         console.error("冒烟测试失败：", error);
-        process.exitCode = 1;
-        quitApplication();
+        quitting = true;
+        stopEnvironmentMonitor();
+        stopFullscreenMonitor();
+        app.exit(1);
       });
     }
   });
@@ -686,6 +923,11 @@ function registerIpc() {
     failApplicationStartup(
       new Error(`渲染进程初始化失败：${String(message || "未知错误")}`),
     );
+  });
+
+  ipcMain.on("pet:set-playing", (_event, value) => {
+    runtime.playing = Boolean(value);
+    updateMenus();
   });
 
   ipcMain.on("pet:update-layout", (_event, rect) => {
@@ -795,7 +1037,7 @@ function registerIpc() {
 
   ipcMain.on("pet:open-menu", () => {
     if (!petWindow || runtime.clickThrough) return;
-    createPetMenu({ includeActions: true }).popup({ window: petWindow });
+    createPetMenu().popup({ window: petWindow });
   });
 }
 
@@ -830,7 +1072,21 @@ async function rendererSmokeState() {
         bubbleVisible: document.querySelector("#speech-bubble")?.classList.contains("visible"),
         bubbleText: document.querySelector("#speech-bubble")?.textContent || "",
         dragging: state?.mode === "dragging",
-        dailyRemainingMs: state?.dailyTimer ? state.dailyTimer.remaining() : 0
+        dailyRemainingMs: state?.dailyTimer ? state.dailyTimer.remaining() : 0,
+        actionRemainingMs: state?.actionTimer ? state.actionTimer.remaining() : 0,
+        playRemainingMs: state?.playTimer ? state.playTimer.remaining() : 0,
+        playing: Boolean(state?.play),
+        manualPaused: Boolean(state?.manualPaused),
+        fullscreenPaused: Boolean(state?.fullscreenPaused),
+        personality: state?.personality,
+        environmentAwareness: state?.environmentAwareness,
+        facing: state?.facing,
+        facingY: state?.facingY,
+        movementKind: state?.movement?.kind || null,
+        movementName: state?.movement?.name || null,
+        movementAxis: state?.movement?.axis || null,
+        movementCycleCount: state?.movement?.cycleCount || null,
+        movementDurationMs: state?.movement?.durationMs || null
       };
     })()`,
     true,
@@ -933,7 +1189,91 @@ async function verifyHoverMaskRegression() {
   );
 }
 
+function menuSignature(menu) {
+  return menu.items.map((item) =>
+    item.type === "separator" ? "separator" : item.label,
+  );
+}
+
+function verifyMainProcessV3Contract() {
+  const petMenu = createPetMenu();
+  const trayMenu = createTrayMenu();
+  const petSignature = menuSignature(petMenu);
+  const traySignature = menuSignature(trayMenu);
+  const playLabel = runtime.playing ? "停止玩耍" : "和糖猫玩耍";
+  const pauseLabel = runtime.paused ? "继续活动" : "暂停活动";
+
+  const expectedPetSignature = [
+    "随机动作",
+    "出去走走",
+    playLabel,
+    "separator",
+    pauseLabel,
+    "调整大小",
+    "separator",
+    "藏起来",
+    "退出",
+  ];
+  const expectedTraySignature = [
+    playLabel,
+    pauseLabel,
+    "环境感知",
+    "性格",
+    "鼠标穿透",
+    "调整大小",
+    "separator",
+    runtime.userHidden ? "叫糖猫回来" : "藏起来",
+    "退出",
+  ];
+  if (
+    JSON.stringify(petSignature) !== JSON.stringify(expectedPetSignature) ||
+    JSON.stringify(traySignature) !== JSON.stringify(expectedTraySignature)
+  ) {
+    throw new Error(
+      `第三版菜单顺序无效：${JSON.stringify({
+        petSignature,
+        traySignature,
+      })}`,
+    );
+  }
+
+  const personalityLabels = trayMenu.items[3].submenu.items.map(
+    (item) => item.label,
+  );
+  if (
+    JSON.stringify(personalityLabels) !==
+      JSON.stringify(["安静", "默认", "活泼"]) ||
+    trayMenu.items[2].checked !== runtime.environmentAwareness ||
+    trayMenu.items[0].enabled !==
+      (runtime.playing || !runtime.fullscreenHidden)
+  ) {
+    throw new Error("第三版托盘动态状态无效");
+  }
+
+  const storedSettings = JSON.parse(
+    fs.readFileSync(persistentSettingsPath(), "utf8"),
+  );
+  if (
+    !isValidPersistentSettings(storedSettings) ||
+    storedSettings.personality !== runtime.personality ||
+    storedSettings.environmentAwareness !== runtime.environmentAwareness
+  ) {
+    throw new Error("第三版持久设置无效");
+  }
+
+  if (
+    !Object.values(runtime.environment).every(
+      (value) => typeof value === "boolean",
+    ) ||
+    activitySamples.length < 1 ||
+    activitySamples.length > ACTIVITY_SAMPLE_COUNT
+  ) {
+    throw new Error("第三版环境采样状态无效");
+  }
+}
+
 async function runSmokeTest() {
+  verifyMainProcessV3Contract();
   await delay(300);
   const startupState = await rendererSmokeState();
   if (
@@ -967,7 +1307,12 @@ async function runSmokeTest() {
   await delay(180);
   const dragDuring = await rendererSmokeState();
   await petWindow.webContents.executeJavaScript(
-    `window.__TANGMAO_SMOKE__.endDragVisual(); "drag-ended"`,
+    `(() => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      smoke.endDragVisual();
+      smoke.enterDaily();
+      return "drag-ended";
+    })()`,
     true,
   );
   await delay(60);
@@ -987,20 +1332,20 @@ async function runSmokeTest() {
       mode: dragAfter.mode,
       assetId: dragAfter.assetId,
       remainingMs: dragAfter.dailyRemainingMs,
+      dailyCycle: dragAfter.dailyCycle,
     },
     expectedDragAsset: manifest.dragAsset,
   };
   if (
     dragState.during.mode !== "dragging" ||
     dragState.during.assetId !== dragState.expectedDragAsset ||
-    dragState.after.mode !== dragState.before.mode ||
-    dragState.after.assetId !== dragState.before.assetId ||
-    Math.abs(
-      dragState.during.remainingMs - dragState.before.remainingMs,
-    ) > 80 ||
-    dragState.after.remainingMs >= dragState.during.remainingMs
+    dragState.during.remainingMs !== 0 ||
+    dragState.after.mode !== "daily" ||
+    dragState.after.dailyCycle <= dragBefore.dailyCycle ||
+    dragState.after.remainingMs < manifest.rules.dailyDelayMs.min - 1000 ||
+    dragState.after.remainingMs > manifest.rules.dailyDelayMs.max
   ) {
-    throw new Error(`拖拽表情或状态恢复无效：${JSON.stringify(dragState)}`);
+    throw new Error(`第三版正常放下语义无效：${JSON.stringify(dragState)}`);
   }
   petWindow.webContents.sendInputEvent({
     type: "mouseMove",
@@ -1133,7 +1478,24 @@ async function runSmokeTest() {
   sendCommand("random-movement", { interrupt: true });
   await delay(550);
   const movementState = await rendererSmokeState();
-  if (movementState.mode !== "movement") {
+  const movementEntry = manifest.movement[movementState.movementName];
+  const movementCycleDuration =
+    movementEntry?.animation.type === "gif"
+      ? manifest.assets[movementEntry.animation.asset].loopDurationMs
+      : movementEntry?.animation.frames.reduce(
+          (total, frame) => total + frame.durationMs,
+          0,
+        );
+  if (
+    movementState.mode !== "movement" ||
+    movementState.movementKind !== "autonomous" ||
+    !["horizontal", "vertical"].includes(movementState.movementAxis) ||
+    !Number.isInteger(movementState.movementCycleCount) ||
+    movementState.movementDurationMs !==
+      movementCycleDuration * movementState.movementCycleCount ||
+    movementState.movementDurationMs < manifest.rules.movementDurationMs.min ||
+    movementState.movementDurationMs > manifest.rules.movementDurationMs.max
+  ) {
     throw new Error(`随机移动状态无效：${JSON.stringify(movementState)}`);
   }
   const positionAfterMovement = petWindow.getPosition();
@@ -1184,10 +1546,7 @@ async function runSmokeTest() {
   }
   await captureSmokePage("03-movement.png");
   await petWindow.webContents.executeJavaScript(
-    `(() => {
-      const state = window.__TANGMAO_SMOKE__?.state;
-      if (state?.movement) state.movement.remainingMs = 80;
-    })()`,
+    `window.__TANGMAO_SMOKE__.enterDaily()`,
     true,
   );
   await delay(300);
@@ -1204,6 +1563,136 @@ async function runSmokeTest() {
       `手动移动结束后没有重置日常倒计时：${JSON.stringify(dailyAfterManualMovement)}`,
     );
   }
+
+  const positionBeforeThrow = petWindow.getPosition();
+  await petWindow.webContents.executeJavaScript(
+    `window.__TANGMAO_SMOKE__.startThrow({
+      x: -1200,
+      y: -600,
+      speed: Math.hypot(1200, 600)
+    })`,
+    true,
+  );
+  await delay(240);
+  const throwState = await rendererSmokeState();
+  const positionDuringThrow = petWindow.getPosition();
+  if (
+    throwState.mode !== "throwing" ||
+    throwState.movementKind !== "throw" ||
+    throwState.bubbleVisible ||
+    throwState.facing !== -1 ||
+    throwState.facingY !== 1 ||
+    (positionBeforeThrow[0] === positionDuringThrow[0] &&
+      positionBeforeThrow[1] === positionDuringThrow[1])
+  ) {
+    throw new Error(`投掷飞行状态无效：${JSON.stringify(throwState)}`);
+  }
+  sendCommand("fullscreen-pause");
+  await delay(80);
+  const positionBeforeThrowPause = petWindow.getPosition();
+  await delay(180);
+  const positionDuringThrowPause = petWindow.getPosition();
+  if (
+    positionBeforeThrowPause[0] !== positionDuringThrowPause[0] ||
+    positionBeforeThrowPause[1] !== positionDuringThrowPause[1]
+  ) {
+    throw new Error("全屏隐藏期间投掷飞行没有暂停");
+  }
+  sendCommand("fullscreen-resume");
+  await delay(220);
+  const positionAfterThrowResume = petWindow.getPosition();
+  if (
+    positionDuringThrowPause[0] === positionAfterThrowResume[0] &&
+    positionDuringThrowPause[1] === positionAfterThrowResume[1]
+  ) {
+    throw new Error("退出全屏后投掷飞行没有恢复");
+  }
+  await petWindow.webContents.executeJavaScript(
+    `(() => {
+      const smoke = window.__TANGMAO_SMOKE__;
+      smoke.finishThrow(smoke.state.movement);
+    })()`,
+    true,
+  );
+  await delay(100);
+  const landingState = await rendererSmokeState();
+  if (
+    landingState.mode !== "landing" ||
+    !manifest.throwBehavior.landingActions.includes(landingState.assetId) ||
+    landingState.bubbleVisible ||
+    landingState.facingY !== 1
+  ) {
+    throw new Error(`投掷落地反馈无效：${JSON.stringify(landingState)}`);
+  }
+  await petWindow.webContents.executeJavaScript(
+    `window.__TANGMAO_SMOKE__.enterDaily()`,
+    true,
+  );
+
+  await petWindow.webContents.executeJavaScript(
+    `window.__TANGMAO_SMOKE__.startPlay("pet")`,
+    true,
+  );
+  await delay(120);
+  const playState = await rendererSmokeState();
+  if (
+    !playState.playing ||
+    !["playing", "play-approach", "play-swat"].includes(playState.mode) ||
+    playState.playRemainingMs < PLAY_DURATION_MS - 1000 ||
+    playState.playRemainingMs > PLAY_DURATION_MS ||
+    playState.bubbleVisible ||
+    !runtime.playing
+  ) {
+    throw new Error(`90秒玩耍初态无效：${JSON.stringify(playState)}`);
+  }
+  setPaused(true);
+  const playBeforePauseDelay = await rendererSmokeState();
+  await delay(160);
+  const playAfterPauseDelay = await rendererSmokeState();
+  setPaused(false);
+  if (
+    playBeforePauseDelay.playRemainingMs -
+      playAfterPauseDelay.playRemainingMs <
+    100
+  ) {
+    throw new Error("手动暂停错误地暂停了玩耍计时");
+  }
+  sendCommand("fullscreen-pause");
+  await delay(120);
+  const playAfterFullscreen = await rendererSmokeState();
+  if (
+    playAfterFullscreen.playing ||
+    !["daily", "hover"].includes(playAfterFullscreen.mode) ||
+    runtime.playing
+  ) {
+    throw new Error(
+      `全屏开始后没有结束玩耍：${JSON.stringify(playAfterFullscreen)}`,
+    );
+  }
+  sendCommand("fullscreen-resume");
+  await delay(80);
+
+  setPersonality("active");
+  await delay(80);
+  const activePersonalityState = await rendererSmokeState();
+  if (
+    activePersonalityState.personality !== "active" ||
+    activePersonalityState.dailyRemainingMs < 9000 ||
+    activePersonalityState.dailyRemainingMs > 18_000
+  ) {
+    throw new Error(
+      `活泼性格倒计时无效：${JSON.stringify(activePersonalityState)}`,
+    );
+  }
+  setPersonality("default");
+  setEnvironmentAwareness(false);
+  await delay(80);
+  const environmentDisabledState = await rendererSmokeState();
+  if (environmentDisabledState.environmentAwareness) {
+    throw new Error("环境感知关闭状态没有同步到渲染进程");
+  }
+  setEnvironmentAwareness(true);
+
   setScale(1.5);
   await delay(250);
   const scaleState = await rendererSmokeState();
@@ -1220,7 +1709,7 @@ async function runSmokeTest() {
       throw new Error("没有收到全屏监测进程的有效状态");
     }
   }
-  console.log("第二版 Electron 冒烟测试通过");
+  console.log("第三版 Electron 冒烟测试通过");
   quitApplication();
 }
 
@@ -1301,6 +1790,8 @@ if (!gotLock) {
     .whenReady()
     .then(async () => {
       loadManifest();
+      loadPersistentSettings();
+      startEnvironmentMonitor();
       registerProtectedResourceProtocol();
       verifyFullscreenMonitorIntegrity();
       registerIpc();
@@ -1313,6 +1804,7 @@ if (!gotLock) {
 
 app.on("before-quit", () => {
   quitting = true;
+  stopEnvironmentMonitor();
   stopFullscreenMonitor();
 });
 

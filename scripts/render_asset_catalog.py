@@ -38,33 +38,50 @@ def load_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
 
 
 def asset_order(manifest: dict) -> list[tuple[str, str]]:
-    ordered: list[tuple[str, str]] = []
-    seen: set[str] = set()
+    ordered_ids: list[str] = []
+    roles: dict[str, list[str]] = {}
+
+    def add_role(asset_id: str, role: str) -> None:
+        if asset_id not in roles:
+            roles[asset_id] = []
+            ordered_ids.append(asset_id)
+        if role not in roles[asset_id]:
+            roles[asset_id].append(role)
+
     for pair in manifest["daily"]:
-        for asset_id, role in [(pair["idle"], "日常")]:
-            if asset_id not in seen:
-                ordered.append((asset_id, role))
-                seen.add(asset_id)
+        add_role(pair["idle"], "日常")
         for asset_id in pair["hovers"]:
-            if asset_id not in seen:
-                ordered.append((asset_id, "悬停"))
-                seen.add(asset_id)
+            add_role(asset_id, "悬停")
+
     drag_asset_id = manifest.get("dragAsset")
-    if drag_asset_id and drag_asset_id not in seen:
-        ordered.append((drag_asset_id, "拖拽"))
-        seen.add(drag_asset_id)
-    movement_ids = {
-        entry["asset"]: name for name, entry in manifest["movement"].items()
-    }
-    for asset_id, name in movement_ids.items():
-        if asset_id not in seen:
-            ordered.append((asset_id, f"移动·{name}"))
-            seen.add(asset_id)
+    if drag_asset_id:
+        add_role(drag_asset_id, "拖拽")
+
+    for name, entry in manifest["movement"].items():
+        animation = entry["animation"]
+        if animation["type"] == "sequence":
+            for frame in animation["frames"]:
+                add_role(frame["asset"], f"移动·{name}")
+        else:
+            add_role(animation["asset"], f"移动·{name}")
+
+    throw_behavior = manifest["throwBehavior"]
+    add_role(throw_behavior["asset"], "投掷")
+    for asset_id in throw_behavior["landingActions"]:
+        add_role(asset_id, "投掷落地")
+
+    play_behavior = manifest["playBehavior"]
+    for asset_id in play_behavior["swatAssets"]:
+        add_role(asset_id, "玩耍挥手")
+    add_role(play_behavior["confusedAsset"], "玩耍疑惑")
+
     for asset_id in manifest["actions"]:
-        if asset_id not in seen:
-            ordered.append((asset_id, "普通动作"))
-            seen.add(asset_id)
-    return ordered
+        add_role(asset_id, "普通动作")
+
+    return [
+        (asset_id, " / ".join(roles[asset_id]))
+        for asset_id in ordered_ids
+    ]
 
 
 def render_cell(

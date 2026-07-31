@@ -1,6 +1,6 @@
 {
   "name": "tangmao-desktop-pet",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "安静陪伴与卖萌的 Windows 糖猫桌面宠物",
   "main": "src/main.js",
   "author": "Walnut",
