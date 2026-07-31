@@ -46,11 +46,14 @@ function readManifest() {
 function validateRuntimeManifest(manifest) {
   if (
     !manifest ||
+    manifest.schemaVersion !== 3 ||
     !manifest.assets ||
     typeof manifest.assets !== "object" ||
     !Array.isArray(manifest.actions) ||
     !Array.isArray(manifest.staticActions) ||
-    !Array.isArray(manifest.gifActions)
+    !Array.isArray(manifest.gifActions) ||
+    !manifest.movement ||
+    typeof manifest.movement !== "object"
   ) {
     throw new Error("生成素材清单缺少运行时字段");
   }
@@ -113,15 +116,74 @@ function validateRuntimeManifest(manifest) {
     }
   }
   requireAsset(manifest.dragAsset, "static", "拖拽素材");
-  for (const [name, movement] of Object.entries(manifest.movement || {})) {
-    requireAsset(movement.asset, "static", `移动素材 ${name}`);
+  const movementEntries = Object.entries(manifest.movement);
+  const expectedMovementNames = ["迈步", "跳跳", "跑"];
+  if (
+    movementEntries.length !== expectedMovementNames.length ||
+    expectedMovementNames.some((name) => !manifest.movement[name])
+  ) {
+    throw new Error("移动行为必须包含迈步、跳跳和跑");
+  }
+  for (const [name, movement] of movementEntries) {
     if (!Number.isFinite(movement.speed) || movement.speed <= 0) {
-      throw new Error(`移动素材速度无效：${name}`);
+      throw new Error(`移动行为速度无效：${name}`);
+    }
+    if (!["left", "right"].includes(movement.sourceFacing)) {
+      throw new Error(`移动行为原始朝向无效：${name}`);
+    }
+    if (
+      !Array.isArray(movement.axes) ||
+      movement.axes.length !== 2 ||
+      !movement.axes.includes("horizontal") ||
+      !movement.axes.includes("vertical")
+    ) {
+      throw new Error(`移动行为必须支持水平与垂直轴：${name}`);
+    }
+    assertUnique(movement.axes, `移动行为 ${name} 的可用轴`);
+
+    const animation = movement.animation;
+    if (animation?.type === "sequence") {
+      if (!Array.isArray(animation.frames) || animation.frames.length === 0) {
+        throw new Error(`移动序列缺少动画帧：${name}`);
+      }
+      for (const frame of animation.frames) {
+        requireAsset(frame.asset, "static", `移动序列 ${name}`);
+        if (!Number.isFinite(frame.durationMs) || frame.durationMs <= 0) {
+          throw new Error(`移动序列帧时长无效：${name}`);
+        }
+      }
+    } else if (animation?.type === "gif") {
+      requireAsset(animation.asset, "gif", `移动 GIF ${name}`);
+    } else {
+      throw new Error(`移动行为动画类型无效：${name}`);
     }
   }
-  if (Object.keys(manifest.movement || {}).length !== 4) {
-    throw new Error("移动素材必须恰好包含四种");
+
+  if (
+    !manifest.throwBehavior ||
+    !Array.isArray(manifest.throwBehavior.landingActions) ||
+    manifest.throwBehavior.landingActions.length !== 6
+  ) {
+    throw new Error("投掷行为字段无效");
   }
+  requireAsset(manifest.throwBehavior.asset, "static", "投掷行为");
+  assertUnique(manifest.throwBehavior.landingActions, "投掷落地动作池");
+  for (const assetId of manifest.throwBehavior.landingActions) {
+    requireAsset(assetId, "static", "投掷落地动作池");
+  }
+
+  if (
+    !manifest.playBehavior ||
+    !Array.isArray(manifest.playBehavior.swatAssets) ||
+    manifest.playBehavior.swatAssets.length !== 2
+  ) {
+    throw new Error("玩耍行为字段无效");
+  }
+  assertUnique(manifest.playBehavior.swatAssets, "玩耍挥手动作池");
+  for (const assetId of manifest.playBehavior.swatAssets) {
+    requireAsset(assetId, "static", "玩耍挥手动作池");
+  }
+  requireAsset(manifest.playBehavior.confusedAsset, "static", "玩耍疑惑素材");
 
   for (const [assetId, asset] of Object.entries(assets)) {
     if (asset.id !== assetId) {

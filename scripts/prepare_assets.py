@@ -23,8 +23,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 LOCAL_ROOT = ASSETS_ROOT / "local"
 COLLECTION_ROOT = LOCAL_ROOT / "糖猫合集"
-INTERACTION_ROOT = LOCAL_ROOT / "日常与悬停拖拽"
-DRAG_ASSET_PATH = INTERACTION_ROOT / "倒立.png"
+INTERACTION_ROOT = LOCAL_ROOT / "日常与悬停"
+DRAG_ASSET_PATH = COLLECTION_ROOT / "倒立.png"
 GENERATED_ROOT = ASSETS_ROOT / "generated"
 STAGING_ROOT = ASSETS_ROOT / "generated-staging"
 OVERRIDES_PATH = PROJECT_ROOT / "scripts" / "asset-overrides.json"
@@ -36,18 +36,42 @@ KEEP_HEIGHT_MIN = 180
 KEEP_HEIGHT_MAX = 200
 GLOBAL_DISPLAY_SCALE = 0.8
 COLLISION_PADDING = 3
-MOVEMENT_FILES = {
-    "跑": "跑.png",
-    "跳": "跳跳.png",
-    "迈步": "迈步.png",
-    "飞猫": "飞猫.png",
+MOVEMENT_SPECS = {
+    "迈步": {
+        "speed": 50,
+        "sourceFacing": "right",
+        "animation": {
+            "type": "sequence",
+            "frames": [("迈步.png", 250), ("抬腿.png", 250)],
+        },
+    },
+    "跳跳": {
+        "speed": 80,
+        "sourceFacing": "right",
+        "animation": {
+            "type": "gif",
+            "source": "动图/跳跳.gif",
+        },
+    },
+    "跑": {
+        "speed": 120,
+        "sourceFacing": "left",
+        "animation": {
+            "type": "sequence",
+            "frames": [("跑.png", 130), ("跑2.png", 130)],
+        },
+    },
 }
-MOVEMENT_SPEEDS = {
-    "跑": 120,
-    "跳": 80,
-    "迈步": 50,
-    "飞猫": 160,
-}
+MOVEMENT_AXES = ["horizontal", "vertical"]
+THROW_LANDING_FILES = [
+    "彩虹吐.png",
+    "翻倒.png",
+    "尴尬.png",
+    "趴2.png",
+    "趴3.png",
+    "吐.png",
+]
+PLAY_SWAT_FILES = ["伸手.png", "打招呼.png"]
 
 
 @dataclass(frozen=True)
@@ -282,11 +306,25 @@ def build_daily_pairs(builder: AssetBuilder) -> tuple[list[dict[str, Any]], set[
     return pairs, daily_asset_ids
 
 
+def register_collection_asset(
+    builder: AssetBuilder,
+    relative_path: str,
+    expected_kind: str,
+) -> str:
+    source_path = COLLECTION_ROOT / relative_path
+    if not source_path.is_file():
+        raise FileNotFoundError(f"缺少合集素材：{source_path}")
+    asset_id = builder.register(source_path)
+    if builder.assets[asset_id]["kind"] != expected_kind:
+        raise ValueError(f"{relative_path} 必须是 {expected_kind} 素材")
+    return asset_id
+
+
 def build_manifest(output_root: Path) -> dict[str, Any]:
     if not COLLECTION_ROOT.is_dir() or not INTERACTION_ROOT.is_dir():
         raise FileNotFoundError(
             "缺少本地素材目录，请准备 assets/local/糖猫合集 和 "
-            "assets/local/日常与悬停拖拽"
+            "assets/local/日常与悬停"
         )
 
     overrides = load_overrides()
@@ -304,16 +342,45 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
 
     movement: dict[str, dict[str, Any]] = {}
     movement_asset_ids: set[str] = set()
-    for movement_name, filename in MOVEMENT_FILES.items():
-        source_path = COLLECTION_ROOT / filename
-        if not source_path.is_file():
-            raise FileNotFoundError(f"缺少移动素材：{source_path}")
-        asset_id = builder.register(source_path)
-        movement_asset_ids.add(asset_id)
+    for movement_name, spec in MOVEMENT_SPECS.items():
+        animation_spec = spec["animation"]
+        animation: dict[str, Any]
+        if animation_spec["type"] == "sequence":
+            frames = []
+            for filename, duration_ms in animation_spec["frames"]:
+                asset_id = register_collection_asset(builder, filename, "static")
+                movement_asset_ids.add(asset_id)
+                frames.append({"asset": asset_id, "durationMs": duration_ms})
+            animation = {"type": "sequence", "frames": frames}
+        else:
+            asset_id = register_collection_asset(
+                builder,
+                animation_spec["source"],
+                "gif",
+            )
+            movement_asset_ids.add(asset_id)
+            animation = {"type": "gif", "asset": asset_id}
         movement[movement_name] = {
-            "asset": asset_id,
-            "speed": MOVEMENT_SPEEDS[movement_name],
+            "speed": spec["speed"],
+            "sourceFacing": spec["sourceFacing"],
+            "axes": list(MOVEMENT_AXES),
+            "animation": animation,
         }
+
+    throw_behavior = {
+        "asset": register_collection_asset(builder, "飞猫.png", "static"),
+        "landingActions": [
+            register_collection_asset(builder, filename, "static")
+            for filename in THROW_LANDING_FILES
+        ],
+    }
+    play_behavior = {
+        "swatAssets": [
+            register_collection_asset(builder, filename, "static")
+            for filename in PLAY_SWAT_FILES
+        ],
+        "confusedAsset": register_collection_asset(builder, "疑惑.png", "static"),
+    }
 
     collection_files = image_files(COLLECTION_ROOT)
     collection_asset_ids = [builder.register(path) for path in collection_files]
@@ -347,7 +414,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
     icon_files = generate_icons(output_root, output_root / stand_asset["file"])
 
     return {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "rules": {
             "dailyDelayMs": {"min": 20_000, "max": 30_000},
@@ -370,6 +437,8 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
         "staticActions": static_action_ids,
         "gifActions": gif_action_ids,
         "movement": movement,
+        "throwBehavior": throw_behavior,
+        "playBehavior": play_behavior,
         "dragAsset": drag_asset_id,
         "iconAsset": stand_asset_id,
         "icons": icon_files,
@@ -381,7 +450,7 @@ def build_manifest(output_root: Path) -> dict[str, Any]:
             "actions": len(action_ids),
             "staticActions": len(static_action_ids),
             "gifActions": len(gif_action_ids),
-            "movementAssets": len(movement),
+            "movementBehaviors": len(movement),
         },
     }
 
@@ -469,7 +538,7 @@ def write_generated_assets() -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="准备糖猫桌宠第二版素材副本")
+    parser = argparse.ArgumentParser(description="准备糖猫桌宠第三版素材副本")
     parser.add_argument(
         "--check",
         action="store_true",
@@ -481,13 +550,13 @@ def main() -> None:
     statistics_data = manifest["statistics"]
     if args.check:
         expected = {
-            "collectionFiles": 154,
-            "dailyFiles": 20,
+            "collectionFiles": 157,
+            "dailyFiles": 19,
             "dailyPairs": 5,
-            "actions": 130,
-            "staticActions": 109,
-            "gifActions": 21,
-            "movementAssets": 4,
+            "actions": 133,
+            "staticActions": 113,
+            "gifActions": 20,
+            "movementBehaviors": 3,
         }
         mismatches = {
             key: (statistics_data.get(key), value)
@@ -505,7 +574,7 @@ def main() -> None:
         "素材准备完成："
         f"{statistics_data['dailyPairs']} 组日常，"
         f"{statistics_data['actions']} 个普通动作，"
-        f"{statistics_data['movementAssets']} 个移动素材"
+        f"{statistics_data['movementBehaviors']} 个移动行为"
     )
 
 

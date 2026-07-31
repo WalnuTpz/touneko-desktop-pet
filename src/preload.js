@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld("desktopPet", {
   reportReady: () => ipcRenderer.send("pet:renderer-ready"),
   reportFailure: (message) =>
     ipcRenderer.send("pet:renderer-failed", String(message || "未知错误")),
+  reportPlaying: (value) =>
+    ipcRenderer.send("pet:set-playing", Boolean(value)),
   updateLayout: (rect) => ipcRenderer.send("pet:update-layout", rect),
   setPointerRegion: (overPet) =>
     ipcRenderer.send("pet:set-pointer-region", Boolean(overPet)),
