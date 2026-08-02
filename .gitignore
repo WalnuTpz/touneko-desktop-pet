@@ -17,3 +17,6 @@ out/
 assets/local/
 assets/generated/
 assets/generated-staging/
+
+# Locally assembled Codex pet packages and QA media
+output/codex-pet/
