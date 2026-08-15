@@ -78,6 +78,17 @@ function verifyAsarInventory() {
       `包内 package.json 的 ${field} 与项目不一致`,
     );
   }
+  assert(packagedMetadata.author === "Walnut", "包内作者名称必须为 Walnut");
+  for (const field of [
+    "repository",
+    "homepage",
+    "bugs",
+    "contributors",
+    "maintainers",
+    "funding",
+  ]) {
+    assert(!(field in packagedMetadata), `包内 package.json 不应包含 ${field}`);
+  }
 
   const pack = asar.extractFile(asarPath, "assets/runtime.tpack");
   assert(

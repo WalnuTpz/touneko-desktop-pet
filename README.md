@@ -2,7 +2,15 @@
 
 一款完全静音、以陪伴和卖萌为目的的 Windows 桌面宠物，使用 Electron 开发。
 
-`v0.3.0` 是当前第三版源码。本仓库只发布代码和文档，不包含角色图片、GIF、生成素材、图标、安装包或便携版 EXE。产品行为以 [桌宠规则](./docs/桌宠规则.md) 为准；启动开场白和动作气泡见 [气泡文案](./docs/气泡文案.md)；历版变化见 [第一版记录](./docs/版本记录/v0.1.0.md)、[第二版记录](./docs/版本记录/v0.2.0.md)和[第三版记录](./docs/版本记录/v0.3.0.md)。
+`v0.3.0` 是当前第三版源码。本仓库只发布代码和文档，不包含角色图片、GIF、生成素材、图标、安装包或便携版 EXE。产品行为以 [桌宠规则](./docs/桌宠规则.md) 为准；文档分类、维护方式和发布边界见[项目文档索引](./docs/README.md)。
+
+## 文档导航
+
+- [桌宠规则](./docs/桌宠规则.md)：当前版本唯一正式行为规格。
+- [气泡文案](./docs/气泡文案.md)：由源码和当前素材清单生成的文案目录。
+- [版本记录](./docs/README.md#文档导航)：第一版、第二版和第三版的历史变化。
+- [素材目录说明](./assets/README.md)：本地素材与生成副本的维护规则。
+- [演示脚本](./docs/演示脚本.md)：内部功能录制执行稿，不属于产品规格。
 
 ## 主要功能
 
@@ -62,8 +70,8 @@ npm test
 npm run start:smoke
 ```
 
-- `npm run check` 检查 JavaScript 源码语法。
-- `npm test` 重建素材副本，并运行核心逻辑、文案和素材清单测试。
+- `npm run check` 检查 JavaScript 源码和构建脚本语法，并校验 Codex 桌宠图集配置及源帧。
+- `npm test` 重建素材副本，并运行核心逻辑、文案、素材清单和加密资源格式测试。
 - `npm run start:smoke` 启动真实 Electron 窗口进行自动冒烟测试，截图写入 `build/smoke-test/`，完成后自动退出。
 
 运行冒烟测试前，需要先从系统托盘完全退出正在运行的糖猫。由于程序使用严格单实例，已有实例未退出时，新的测试进程会直接静默结束。
@@ -82,7 +90,17 @@ npm run catalog:assets
 npm run docs:dialogue
 ```
 
-## 生成朋友分享版
+## 生成 Codex 桌宠图集
+
+本地辅助工具可以从指定的原始 PNG/GIF 帧生成固定布局的 Codex 桌宠图集：
+
+```powershell
+npm run pet:codex
+```
+
+默认输出到 `output/codex-pet/tangmao-strict/`，包括逐帧文件、PNG/WebP 图集、可导入包和来源映射。该目录由 `.gitignore` 排除，不属于 Windows 桌宠运行时或便携版。`npm run check` 只校验配置和源帧，不写入这些生成物。
+
+## 构建便携版
 
 生成 Windows x64 单文件便携版：
 
@@ -97,9 +115,10 @@ npm run dist
 - 使用每次构建随机生成的 AES-256-GCM 密钥加密资源包；运行时一次解密到内存，不主动写出明文图片。
 - 通过同源内部协议加载页面和图片，保留透明像素命中检测。
 - 启用 ASAR 完整性和 Electron Fuses，禁止常见的调试参数、Node 模式和 ASAR 替换。
+- 包内应用元数据保留运行需要的字段和作者名 `Walnut`，不包含仓库地址、主页、问题地址或贡献者列表。
 - 检查正式包文件白名单、资源加密状态和 Fuses 后才算构建成功。
 
-这些措施用于防止随手解包，并不能让离线客户端绝对不可逆向；解密能力仍随程序存在，EXE 内嵌应用图标也必须能被 Windows 直接读取。便携版每次启动前都要解压 Electron 运行环境，速度会比 `release/win-unpacked/糖猫桌宠.exe` 慢；后者只适合本机测试，不是单文件分享成品。
+这些措施用于防止随手提取，并不能让离线客户端绝对不可逆向；解密能力仍随程序存在，EXE 内嵌应用图标也必须能被 Windows 直接读取。便携版是 NSIS 自解压程序，压缩软件能够查看其外层内容属于正常现象。它每次启动前都会解压 Electron 运行环境，速度会比 `release/win-unpacked/糖猫桌宠.exe` 慢；后者只适合本机测试，不是单文件分享成品。
 
 当前项目没有配置商业 Authenticode 证书，朋友首次运行时可能看到 Windows 的“未知发布者”提醒。代码仓库仍然只发布源码和文档，`release/` 继续由 `.gitignore` 排除。
 
@@ -126,17 +145,23 @@ npm run dist
 │  ├─ local/                       本地原始素材，不进入版本控制
 │  └─ generated/                   自动生成的运行时素材，不进入版本控制
 ├─ docs/
+│  ├─ README.md                    文档索引、权威顺序与发布边界
 │  ├─ 版本记录/
 │  │  ├─ v0.1.0.md                第一版技术样机的初始快照
 │  │  ├─ v0.2.0.md                第二版相对第一版的变化
 │  │  └─ v0.3.0.md                第三版相对第二版的变化
 │  ├─ 桌宠规则.md                  正式行为规则
-│  └─ 气泡文案.md                  由源码同步的文案目录
+│  ├─ 气泡文案.md                  由源码同步的文案目录
+│  └─ 演示脚本.md                  内部功能录制执行稿
 ├─ scripts/
 │  ├─ prepare_assets.py            素材扫描、配对和副本生成
 │  ├─ asset-overrides.json         少量异常素材的显示倍率
 │  ├─ render_asset_catalog.py      素材尺寸目录图生成
 │  ├─ render_dialogue_doc.js       气泡文案文档同步
+│  ├─ build_codex_pet.py           Codex 桌宠图集生成与配置检查
+│  ├─ build_secure_runtime.js      正式运行资源打包与加密
+│  ├─ verify_secure_package.js     便携版内容和安全配置校验
+│  ├─ smoke_portable.js            最终便携版自动冒烟测试
 │  ├─ make_icon.py                 Windows 图标生成
 │  └─ fullscreen-monitor.ps1       Windows 全屏窗口监测
 ├─ src/                            Electron 应用源码
