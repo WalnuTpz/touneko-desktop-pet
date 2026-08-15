@@ -46,7 +46,7 @@ function readManifest() {
 function validateRuntimeManifest(manifest) {
   if (
     !manifest ||
-    manifest.schemaVersion !== 3 ||
+    manifest.schemaVersion !== 4 ||
     !manifest.assets ||
     typeof manifest.assets !== "object" ||
     !Array.isArray(manifest.actions) ||
@@ -80,7 +80,12 @@ function validateRuntimeManifest(manifest) {
   assertUnique(manifest.actions, "普通动作池");
   assertUnique(manifest.staticActions, "静态动作池");
   assertUnique(manifest.gifActions, "GIF 动作池");
-  for (const assetId of manifest.actions) requireAsset(assetId, null, "普通动作池");
+  for (const assetId of manifest.actions) {
+    const asset = requireAsset(assetId, null, "普通动作池");
+    if (typeof asset.dialogueId !== "string") {
+      throw new Error(`普通动作缺少文案 ID：${assetId}`);
+    }
+  }
   for (const assetId of manifest.staticActions) {
     requireAsset(assetId, "static", "静态动作池");
   }
@@ -117,12 +122,12 @@ function validateRuntimeManifest(manifest) {
   }
   requireAsset(manifest.dragAsset, "static", "拖拽素材");
   const movementEntries = Object.entries(manifest.movement);
-  const expectedMovementNames = ["迈步", "跳跳", "跑"];
+  const expectedMovementNames = ["walk", "jump", "run"];
   if (
     movementEntries.length !== expectedMovementNames.length ||
     expectedMovementNames.some((name) => !manifest.movement[name])
   ) {
-    throw new Error("移动行为必须包含迈步、跳跳和跑");
+    throw new Error("移动行为必须包含 walk、jump 和 run");
   }
   for (const [name, movement] of movementEntries) {
     if (!Number.isFinite(movement.speed) || movement.speed <= 0) {
@@ -183,6 +188,10 @@ function validateRuntimeManifest(manifest) {
   for (const assetId of manifest.playBehavior.swatAssets) {
     requireAsset(assetId, "static", "玩耍挥手动作池");
   }
+  requireAsset(manifest.playBehavior.greetingAsset, "static", "玩耍打招呼素材");
+  if (!manifest.playBehavior.swatAssets.includes(manifest.playBehavior.greetingAsset)) {
+    throw new Error("玩耍打招呼素材必须属于挥手动作池");
+  }
   requireAsset(manifest.playBehavior.confusedAsset, "static", "玩耍疑惑素材");
 
   for (const [assetId, asset] of Object.entries(assets)) {
@@ -210,7 +219,7 @@ function createRuntimeManifest(sourceManifest) {
   delete manifest.icons.sizes;
   delete manifest.icons.appSource;
   for (const asset of Object.values(manifest.assets)) {
-    delete asset.sources;
+    delete asset.source;
     delete asset.contentHash;
     delete asset.displaySize;
     delete asset.representativeFrame;

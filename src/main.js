@@ -1110,7 +1110,7 @@ async function verifyHoverMaskRegression() {
       const manifest = smoke.manifest;
       const state = smoke.state;
       const pair =
-        manifest.daily.find((entry) => entry.number === 7) ||
+        manifest.daily.find((entry) => entry.id === "sleeping") ||
         manifest.daily[0];
       const waitForImage = () =>
         petImage.complete && petImage.naturalWidth
@@ -1650,12 +1650,7 @@ async function runSmokeTest() {
   ) {
     throw new Error(`90秒玩耍初态无效：${JSON.stringify(playState)}`);
   }
-  const greetingAssetId = manifest.playBehavior.swatAssets.find(
-    (assetId) => manifest.assets[assetId]?.name === "打招呼",
-  );
-  if (!greetingAssetId) {
-    throw new Error("玩耍拍鼠标素材中缺少打招呼");
-  }
+  const greetingAssetId = manifest.playBehavior.greetingAsset;
   await petWindow.webContents.executeJavaScript(
     `(() => {
       const smoke = window.__TANGMAO_SMOKE__;

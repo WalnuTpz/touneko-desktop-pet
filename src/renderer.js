@@ -18,8 +18,7 @@ const {
 } = window.PetCore;
 const {
   bubbleMessageForAction,
-  dialogueForAsset,
-  normalizeAssetName,
+  dialogueForAction,
   openingDialogueForLaunch,
 } = window.PetDialogue;
 
@@ -70,8 +69,13 @@ const PERSONALITY_PROFILES = Object.freeze({
     actionProbability: 0.55,
   }),
 });
-const SLEEP_ACTION_NAMES = new Set(["吃饱睡", "趴2", "睡", "躺椅"]);
-const WORK_ACTION_NAMES = new Set(["吊水", "写字", "看书"]);
+const SLEEP_ACTION_IDS = new Set([
+  "sleep-after-meal",
+  "prone-2",
+  "sleep",
+  "recliner",
+]);
+const WORK_ACTION_IDS = new Set(["iv-drip", "writing", "read-book"]);
 
 let manifest = null;
 let assets = null;
@@ -786,8 +790,8 @@ function showBubble(message, durationMs) {
 
 function showActionBubble(asset, actionDurationMs, force = false) {
   const message = force
-    ? dialogueForAsset(asset.name, () => 0)
-    : bubbleMessageForAction(asset.name);
+    ? dialogueForAction(asset.dialogueId, () => 0)
+    : bubbleMessageForAction(asset.dialogueId);
   const duration = Math.max(
     1200,
     Math.min(2800, Number(actionDurationMs) - 120),
@@ -834,9 +838,8 @@ function environmentPreference() {
 
 function actionEnvironmentWeight(assetId) {
   const preference = environmentPreference();
-  const name = normalizeAssetName(assets[assetId].name);
-  if (preference === "work" && WORK_ACTION_NAMES.has(name)) return 3;
-  if (preference === "sleep" && SLEEP_ACTION_NAMES.has(name)) return 3;
+  if (preference === "work" && WORK_ACTION_IDS.has(assetId)) return 3;
+  if (preference === "sleep" && SLEEP_ACTION_IDS.has(assetId)) return 3;
   return 1;
 }
 
@@ -1320,21 +1323,21 @@ function startPlayReaction(mode, assetId, durationMs) {
 function setPlayPointerFacing(direction) {
   const greetingSwat =
     state.mode === "play-swat" &&
-    normalizeAssetName(currentAsset()?.name) === "打招呼";
+    currentAsset()?.id === manifest.playBehavior.greetingAsset;
   state.play.swatBaseFacing = greetingSwat ? direction : null;
   setFacing(direction * (greetingSwat ? -1 : 1));
 }
 
-function startPlayMotion(kind, movementName, speed, options = {}) {
+function startPlayMotion(kind, movementId, options = {}) {
   cancelMovement();
   state.playReactionTimer.cancel();
   if (kind !== "play-approach") {
     state.playChaseAttemptTimer.cancel();
   }
-  const behavior = manifest.movement[movementName];
+  const behavior = manifest.movement[movementId];
   const movement = {
     kind,
-    speed,
+    speed: behavior.speed,
     sourceFacing: behavior.sourceFacing,
     direction: options.direction || null,
     endsAt: options.endsAt || null,
@@ -1382,7 +1385,7 @@ function tryStartPlayChase() {
     schedulePlayChaseAttempt();
     return;
   }
-  startPlayMotion("play-chase", "跑", 120, {
+  startPlayMotion("play-chase", "run", {
     endsAt:
       performance.now() +
       randomBetween(
@@ -1475,7 +1478,7 @@ function handlePlayPointer(point) {
   if (state.mode === "play-chase") return;
   if (distance > PLAY_APPROACH_START_DISTANCE) {
     if (state.mode !== "play-approach") {
-      startPlayMotion("play-approach", "迈步", 50, {
+      startPlayMotion("play-approach", "walk", {
         stopDistance: PLAY_APPROACH_STOP_DISTANCE,
       });
     }
