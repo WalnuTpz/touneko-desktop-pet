@@ -114,7 +114,7 @@ def render_cell(
     image_y = baseline_y - height
     page.alpha_composite(image, (image_x, image_y))
     label = (
-        f"{role} · {asset['name']} · {asset['kind']} · "
+        f"{role} · {asset['id']} · {asset['kind']} · "
         f"{asset['contentBounds']['height']}px × {asset['displayScale']:.3f}"
     )
     draw.text((cell_x + 10, cell_y + 8), label, fill=TEXT, font=font)

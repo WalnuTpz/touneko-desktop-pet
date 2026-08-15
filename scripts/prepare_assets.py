@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import math
+import re
 import shutil
 import statistics
 import sys
@@ -22,56 +22,19 @@ if hasattr(sys.stdout, "reconfigure"):
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_ROOT = PROJECT_ROOT / "assets"
 LOCAL_ROOT = ASSETS_ROOT / "local"
-COLLECTION_ROOT = LOCAL_ROOT / "糖猫合集"
-INTERACTION_ROOT = LOCAL_ROOT / "日常与悬停"
-DRAG_ASSET_PATH = COLLECTION_ROOT / "倒立.png"
+STATIC_ROOT = LOCAL_ROOT / "static"
+ANIMATED_ROOT = LOCAL_ROOT / "animated"
+CATALOG_PATH = ASSETS_ROOT / "catalog.json"
 GENERATED_ROOT = ASSETS_ROOT / "generated"
 STAGING_ROOT = ASSETS_ROOT / "generated-staging"
-OVERRIDES_PATH = PROJECT_ROOT / "scripts" / "asset-overrides.json"
 
-SUPPORTED_SUFFIXES = {".png", ".gif"}
+SEMANTIC_ID = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 ALPHA_THRESHOLD = 8
 TARGET_BODY_HEIGHT = 190
 KEEP_HEIGHT_MIN = 180
 KEEP_HEIGHT_MAX = 200
 GLOBAL_DISPLAY_SCALE = 0.8
 COLLISION_PADDING = 3
-MOVEMENT_SPECS = {
-    "迈步": {
-        "speed": 50,
-        "sourceFacing": "right",
-        "animation": {
-            "type": "sequence",
-            "frames": [("迈步.png", 250), ("抬腿.png", 250)],
-        },
-    },
-    "跳跳": {
-        "speed": 80,
-        "sourceFacing": "right",
-        "animation": {
-            "type": "gif",
-            "source": "动图/跳跳.gif",
-        },
-    },
-    "跑": {
-        "speed": 120,
-        "sourceFacing": "left",
-        "animation": {
-            "type": "sequence",
-            "frames": [("跑.png", 130), ("跑2.png", 130)],
-        },
-    },
-}
-MOVEMENT_AXES = ["horizontal", "vertical"]
-THROW_LANDING_FILES = [
-    "彩虹吐.png",
-    "翻倒.png",
-    "尴尬.png",
-    "趴2.png",
-    "趴3.png",
-    "吐.png",
-]
-PLAY_SWAT_FILES = ["伸手.png", "打招呼.png"]
 
 
 @dataclass(frozen=True)
@@ -93,24 +56,11 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def image_files(root: Path) -> list[Path]:
-    return sorted(
-        (
-            path
-            for path in root.rglob("*")
-            if path.is_file() and path.suffix.lower() in SUPPORTED_SUFFIXES
-        ),
-        key=lambda path: path.relative_to(root).as_posix(),
-    )
-
-
 def alpha_bounds(image: Image.Image) -> tuple[int, int, int, int]:
     alpha = image.getchannel("A")
     thresholded = alpha.point(lambda value: 255 if value >= ALPHA_THRESHOLD else 0)
     bounds = thresholded.getbbox()
-    if bounds is None:
-        return (0, 0, 1, 1)
-    return bounds
+    return bounds if bounds is not None else (0, 0, 1, 1)
 
 
 def bounds_dict(bounds: tuple[int, int, int, int]) -> dict[str, int]:
@@ -127,7 +77,7 @@ def load_frames(path: Path) -> tuple[list[FrameData], int]:
     with Image.open(path) as image:
         default_duration = int(image.info.get("duration", 100) or 100)
         loop = int(image.info.get("loop", 0) or 0)
-        frames: list[FrameData] = []
+        frames = []
         for frame in ImageSequence.Iterator(image):
             rgba = frame.convert("RGBA")
             duration = int(frame.info.get("duration", default_duration) or default_duration)
@@ -153,7 +103,7 @@ def representative_frame_index(frames: list[FrameData]) -> int:
 
 
 def display_scale(
-    source_path: Path,
+    asset_id: str,
     frames: list[FrameData],
     representative_index: int,
     multipliers: dict[str, float],
@@ -163,40 +113,95 @@ def display_scale(
     base_scale = 1.0
     if height < KEEP_HEIGHT_MIN or height > KEEP_HEIGHT_MAX:
         base_scale = TARGET_BODY_HEIGHT / height
-    multiplier = float(multipliers.get(relative_source(source_path), 1.0))
+    multiplier = float(multipliers.get(asset_id, 1.0))
     if not math.isfinite(multiplier) or multiplier <= 0:
-        raise ValueError(f"无效的素材缩放倍率：{relative_source(source_path)}")
+        raise ValueError(f"无效的素材缩放倍率：{asset_id}")
     return round(base_scale * multiplier * GLOBAL_DISPLAY_SCALE, 8)
 
 
-def load_overrides() -> dict[str, Any]:
-    if not OVERRIDES_PATH.exists():
-        return {"scaleMultipliers": {}}
-    return json.loads(OVERRIDES_PATH.read_text(encoding="utf-8"))
+def load_catalog() -> dict[str, Any]:
+    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    if catalog.get("schemaVersion") != 4:
+        raise ValueError("素材目录必须使用 schemaVersion 4")
+
+    static_ids = list(catalog["staticAssets"])
+    animated_ids = list(catalog["animatedAssets"])
+    all_ids = static_ids + animated_ids
+    if len(all_ids) != len(set(all_ids)):
+        raise ValueError("素材目录存在重复 ID")
+    invalid_ids = [asset_id for asset_id in all_ids if not SEMANTIC_ID.fullmatch(asset_id)]
+    if invalid_ids:
+        raise ValueError(f"素材 ID 格式无效：{', '.join(invalid_ids)}")
+
+    references: list[str] = list(catalog["actions"])
+    for daily in catalog["daily"]:
+        references.extend([daily["idle"], *daily["hovers"]])
+    for movement in catalog["movement"].values():
+        animation = movement["animation"]
+        if animation["type"] == "sequence":
+            references.extend(frame["asset"] for frame in animation["frames"])
+        elif animation["type"] == "gif":
+            references.append(animation["asset"])
+        else:
+            raise ValueError(f"未知移动动画类型：{animation['type']}")
+    references.extend(
+        [
+            catalog["throwBehavior"]["asset"],
+            *catalog["throwBehavior"]["landingActions"],
+            *catalog["playBehavior"]["swatAssets"],
+            catalog["playBehavior"]["greetingAsset"],
+            catalog["playBehavior"]["confusedAsset"],
+            catalog["dragAsset"],
+            catalog["iconAsset"],
+        ]
+    )
+    references.extend(catalog.get("scaleMultipliers", {}).keys())
+    missing = sorted(set(references) - set(all_ids))
+    if missing:
+        raise ValueError(f"素材目录引用了未声明 ID：{', '.join(missing)}")
+    if len(catalog["actions"]) != len(set(catalog["actions"])):
+        raise ValueError("普通动作列表存在重复 ID")
+    return catalog
 
 
 class AssetBuilder:
-    def __init__(self, output_root: Path, overrides: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        static_ids: set[str],
+        animated_ids: set[str],
+        multipliers: dict[str, float],
+    ) -> None:
         self.output_root = output_root
-        self.multipliers = dict(overrides.get("scaleMultipliers", {}))
+        self.static_ids = static_ids
+        self.animated_ids = animated_ids
+        self.multipliers = multipliers
         self.assets: dict[str, dict[str, Any]] = {}
         self.asset_ids_by_hash: dict[str, str] = {}
 
-    def register(self, source_path: Path) -> str:
-        content_hash = sha256(source_path)
-        existing_id = self.asset_ids_by_hash.get(content_hash)
-        if existing_id is not None:
-            sources = self.assets[existing_id]["sources"]
-            source_name = relative_source(source_path)
-            if source_name not in sources:
-                sources.append(source_name)
-            return existing_id
+    def register(self, asset_id: str) -> str:
+        if asset_id in self.assets:
+            return asset_id
+        if asset_id in self.static_ids:
+            source_path = STATIC_ROOT / f"{asset_id}.png"
+            kind = "static"
+        elif asset_id in self.animated_ids:
+            source_path = ANIMATED_ROOT / f"{asset_id}.gif"
+            kind = "gif"
+        else:
+            raise KeyError(f"未声明的素材 ID：{asset_id}")
+        if not source_path.is_file():
+            raise FileNotFoundError(f"缺少素材：{source_path}")
 
-        asset_id = content_hash[:20]
+        content_hash = sha256(source_path)
+        duplicate_id = self.asset_ids_by_hash.get(content_hash)
+        if duplicate_id is not None:
+            raise ValueError(f"素材内容重复：{asset_id} 与 {duplicate_id}")
+
         frames, source_loop = load_frames(source_path)
         representative_index = representative_frame_index(frames)
         scale = display_scale(
-            source_path,
+            asset_id,
             frames,
             representative_index,
             self.multipliers,
@@ -208,12 +213,11 @@ class AssetBuilder:
             max(frame.bounds[2] for frame in frames),
             max(frame.bounds[3] for frame in frames),
         )
-        kind = "gif" if source_path.suffix.lower() == ".gif" else "static"
+        output_key = content_hash[:20]
         asset: dict[str, Any] = {
             "id": asset_id,
-            "name": source_path.stem,
             "kind": kind,
-            "sources": [relative_source(source_path)],
+            "source": relative_source(source_path),
             "contentHash": content_hash,
             "canvas": {"width": canvas_width, "height": canvas_height},
             "contentBounds": bounds_dict(union_bounds),
@@ -227,8 +231,7 @@ class AssetBuilder:
         }
 
         if kind == "static":
-            suffix = source_path.suffix.lower()
-            output_relative = Path("files") / "static" / f"{asset_id}{suffix}"
+            output_relative = Path("files") / "static" / f"{output_key}.png"
             output_path = self.output_root / output_relative
             output_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, output_path)
@@ -242,17 +245,16 @@ class AssetBuilder:
             ]
             asset["loopDurationMs"] = 0
         else:
-            animation_root = Path("files") / "animated" / asset_id
+            animation_root = Path("files") / "animated" / output_key
             copied_gif = animation_root / "source.gif"
             copied_gif_path = self.output_root / copied_gif
             copied_gif_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_path, copied_gif_path)
 
-            frame_entries: list[dict[str, Any]] = []
+            frame_entries = []
             for index, frame in enumerate(frames):
                 frame_relative = animation_root / f"frame-{index:03d}.png"
-                frame_path = self.output_root / frame_relative
-                frame.image.save(frame_path, format="PNG", optimize=True)
+                frame.image.save(self.output_root / frame_relative, format="PNG", optimize=True)
                 frame_entries.append(
                     {
                         "file": frame_relative.as_posix(),
@@ -260,7 +262,6 @@ class AssetBuilder:
                         "bounds": bounds_dict(frame.bounds),
                     }
                 )
-
             asset["file"] = copied_gif.as_posix()
             asset["frames"] = frame_entries
             asset["frameCount"] = len(frames)
@@ -272,193 +273,9 @@ class AssetBuilder:
         return asset_id
 
 
-def build_daily_pairs(builder: AssetBuilder) -> tuple[list[dict[str, Any]], set[str]]:
-    numbered: dict[int, list[Path]] = {}
-    for path in image_files(INTERACTION_ROOT):
-        prefix, separator, _rest = path.name.partition("_")
-        if not separator or not prefix.isdigit():
-            continue
-        numbered.setdefault(int(prefix), []).append(path)
-
-    pairs: list[dict[str, Any]] = []
-    daily_asset_ids: set[str] = set()
-    for idle_number in sorted(number for number in numbered if number % 2 == 1):
-        idle_files = numbered[idle_number]
-        hover_files = numbered.get(idle_number + 1, [])
-        if len(idle_files) != 1:
-            raise ValueError(f"日常编号 {idle_number} 必须且只能有一张图片")
-        if not hover_files:
-            raise ValueError(f"日常编号 {idle_number} 缺少编号 {idle_number + 1} 的悬停图片")
-        idle_id = builder.register(idle_files[0])
-        hover_ids = [builder.register(path) for path in sorted(hover_files)]
-        daily_asset_ids.add(idle_id)
-        daily_asset_ids.update(hover_ids)
-        pairs.append(
-            {
-                "id": f"daily-{idle_number}",
-                "number": idle_number,
-                "idle": idle_id,
-                "hovers": hover_ids,
-            }
-        )
-    if not pairs:
-        raise ValueError("没有识别到日常与悬停配对")
-    return pairs, daily_asset_ids
-
-
-def register_collection_asset(
-    builder: AssetBuilder,
-    relative_path: str,
-    expected_kind: str,
-) -> str:
-    source_path = COLLECTION_ROOT / relative_path
-    if not source_path.is_file():
-        raise FileNotFoundError(f"缺少合集素材：{source_path}")
-    asset_id = builder.register(source_path)
-    if builder.assets[asset_id]["kind"] != expected_kind:
-        raise ValueError(f"{relative_path} 必须是 {expected_kind} 素材")
-    return asset_id
-
-
-def build_manifest(output_root: Path) -> dict[str, Any]:
-    if not COLLECTION_ROOT.is_dir() or not INTERACTION_ROOT.is_dir():
-        raise FileNotFoundError(
-            "缺少本地素材目录，请准备 assets/local/糖猫合集 和 "
-            "assets/local/日常与悬停"
-        )
-
-    overrides = load_overrides()
-    builder = AssetBuilder(output_root, overrides)
-    daily_pairs, _daily_asset_ids = build_daily_pairs(builder)
-    interaction_asset_ids = {
-        builder.register(path) for path in image_files(INTERACTION_ROOT)
-    }
-
-    if not DRAG_ASSET_PATH.is_file():
-        raise FileNotFoundError(f"缺少拖拽素材：{DRAG_ASSET_PATH}")
-    drag_asset_id = builder.register(DRAG_ASSET_PATH)
-    if builder.assets[drag_asset_id]["kind"] != "static":
-        raise ValueError("倒立.png 必须是静态图片")
-
-    movement: dict[str, dict[str, Any]] = {}
-    movement_asset_ids: set[str] = set()
-    for movement_name, spec in MOVEMENT_SPECS.items():
-        animation_spec = spec["animation"]
-        animation: dict[str, Any]
-        if animation_spec["type"] == "sequence":
-            frames = []
-            for filename, duration_ms in animation_spec["frames"]:
-                asset_id = register_collection_asset(builder, filename, "static")
-                movement_asset_ids.add(asset_id)
-                frames.append({"asset": asset_id, "durationMs": duration_ms})
-            animation = {"type": "sequence", "frames": frames}
-        else:
-            asset_id = register_collection_asset(
-                builder,
-                animation_spec["source"],
-                "gif",
-            )
-            movement_asset_ids.add(asset_id)
-            animation = {"type": "gif", "asset": asset_id}
-        movement[movement_name] = {
-            "speed": spec["speed"],
-            "sourceFacing": spec["sourceFacing"],
-            "axes": list(MOVEMENT_AXES),
-            "animation": animation,
-        }
-
-    throw_behavior = {
-        "asset": register_collection_asset(builder, "飞猫.png", "static"),
-        "landingActions": [
-            register_collection_asset(builder, filename, "static")
-            for filename in THROW_LANDING_FILES
-        ],
-    }
-    play_behavior = {
-        "swatAssets": [
-            register_collection_asset(builder, filename, "static")
-            for filename in PLAY_SWAT_FILES
-        ],
-        "confusedAsset": register_collection_asset(builder, "疑惑.png", "static"),
-    }
-
-    collection_files = image_files(COLLECTION_ROOT)
-    collection_asset_ids = [builder.register(path) for path in collection_files]
-    action_ids: list[str] = []
-    seen_action_ids: set[str] = set()
-    excluded_ids = interaction_asset_ids | movement_asset_ids
-    for asset_id in collection_asset_ids:
-        if asset_id in excluded_ids or asset_id in seen_action_ids:
-            continue
-        seen_action_ids.add(asset_id)
-        action_ids.append(asset_id)
-
-    gif_action_ids = [
-        asset_id
-        for asset_id in action_ids
-        if builder.assets[asset_id]["kind"] == "gif"
-    ]
-    static_action_ids = [
-        asset_id
-        for asset_id in action_ids
-        if builder.assets[asset_id]["kind"] == "static"
-    ]
-
-    stand_path = COLLECTION_ROOT / "站.png"
-    if not stand_path.exists():
-        raise FileNotFoundError(f"缺少图标素材：{stand_path}")
-    stand_asset_id = builder.register(stand_path)
-    stand_asset = builder.assets[stand_asset_id]
-    if stand_asset["kind"] != "static":
-        raise ValueError("站.png 必须是静态图片")
-    icon_files = generate_icons(output_root, output_root / stand_asset["file"])
-
-    return {
-        "schemaVersion": 3,
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "rules": {
-            "dailyDelayMs": {"min": 20_000, "max": 30_000},
-            "staticDurationMs": {"min": 2_000, "max": 4_000},
-            "gifDurationMs": {"min": 3_000, "max": 6_000},
-            "movementDurationMs": {"min": 3_000, "max": 8_000},
-            "openingBubbleDurationMs": 3_500,
-            "automaticActionProbability": 0.66,
-            "automaticMovementProbability": 0.34,
-            "movementAxisProbability": {"horizontal": 0.5, "vertical": 0.5},
-            "recentLimit": 5,
-            "hoverLeaveDelayMs": 120,
-            "hoverTolerance": 4,
-            "alphaThreshold": ALPHA_THRESHOLD,
-            "baseDisplayScale": GLOBAL_DISPLAY_SCALE,
-            "scaleOptions": [0.75, 1, 1.25, 1.5],
-        },
-        "daily": daily_pairs,
-        "actions": action_ids,
-        "staticActions": static_action_ids,
-        "gifActions": gif_action_ids,
-        "movement": movement,
-        "throwBehavior": throw_behavior,
-        "playBehavior": play_behavior,
-        "dragAsset": drag_asset_id,
-        "iconAsset": stand_asset_id,
-        "icons": icon_files,
-        "assets": builder.assets,
-        "statistics": {
-            "collectionFiles": len(collection_files),
-            "dailyFiles": len(image_files(INTERACTION_ROOT)),
-            "dailyPairs": len(daily_pairs),
-            "actions": len(action_ids),
-            "staticActions": len(static_action_ids),
-            "gifActions": len(gif_action_ids),
-            "movementBehaviors": len(movement),
-        },
-    }
-
-
 def square_icon(source: Image.Image, size: int) -> Image.Image:
     rgba = source.convert("RGBA")
-    bounds = alpha_bounds(rgba)
-    cropped = rgba.crop(bounds)
+    cropped = rgba.crop(alpha_bounds(rgba))
     margin = max(1, round(size * 0.075))
     inner = max(1, size - margin * 2)
     ratio = min(inner / cropped.width, inner / cropped.height)
@@ -487,7 +304,7 @@ def generate_icons(output_root: Path, source_path: Path) -> dict[str, Any]:
     icon_root = output_root / "icons"
     icon_root.mkdir(parents=True, exist_ok=True)
     sizes = [16, 20, 24, 30, 32, 36, 40, 48, 64, 128, 256]
-    files: dict[str, str] = {}
+    files = {}
     for size in sizes:
         relative = Path("icons") / f"tangmao-{size}.png"
         square_icon(source, size).save(output_root / relative, format="PNG")
@@ -502,6 +319,75 @@ def generate_icons(output_root: Path, source_path: Path) -> dict[str, Any]:
             {"scaleFactor": 1.5, "file": files["24"]},
             {"scaleFactor": 2, "file": files["32"]},
         ],
+    }
+
+
+def build_manifest(output_root: Path) -> dict[str, Any]:
+    catalog = load_catalog()
+    static_ids = list(catalog["staticAssets"])
+    animated_ids = list(catalog["animatedAssets"])
+    builder = AssetBuilder(
+        output_root,
+        set(static_ids),
+        set(animated_ids),
+        dict(catalog.get("scaleMultipliers", {})),
+    )
+    for asset_id in static_ids + animated_ids:
+        builder.register(asset_id)
+
+    action_ids = list(catalog["actions"])
+    aliases = dict(catalog.get("dialogueAliases", {}))
+    for asset_id in action_ids:
+        builder.assets[asset_id]["dialogueId"] = aliases.get(asset_id, asset_id)
+    static_action_ids = [
+        asset_id for asset_id in action_ids if builder.assets[asset_id]["kind"] == "static"
+    ]
+    gif_action_ids = [
+        asset_id for asset_id in action_ids if builder.assets[asset_id]["kind"] == "gif"
+    ]
+
+    icon_asset = builder.assets[catalog["iconAsset"]]
+    icon_files = generate_icons(output_root, output_root / icon_asset["file"])
+    return {
+        "schemaVersion": 4,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "rules": {
+            "dailyDelayMs": {"min": 20_000, "max": 30_000},
+            "staticDurationMs": {"min": 2_000, "max": 4_000},
+            "gifDurationMs": {"min": 3_000, "max": 6_000},
+            "movementDurationMs": {"min": 3_000, "max": 8_000},
+            "openingBubbleDurationMs": 3_500,
+            "automaticActionProbability": 0.66,
+            "automaticMovementProbability": 0.34,
+            "movementAxisProbability": {"horizontal": 0.5, "vertical": 0.5},
+            "recentLimit": 5,
+            "hoverLeaveDelayMs": 120,
+            "hoverTolerance": 4,
+            "alphaThreshold": ALPHA_THRESHOLD,
+            "baseDisplayScale": GLOBAL_DISPLAY_SCALE,
+            "scaleOptions": [0.75, 1, 1.25, 1.5],
+        },
+        "daily": catalog["daily"],
+        "actions": action_ids,
+        "staticActions": static_action_ids,
+        "gifActions": gif_action_ids,
+        "movement": catalog["movement"],
+        "throwBehavior": catalog["throwBehavior"],
+        "playBehavior": catalog["playBehavior"],
+        "dragAsset": catalog["dragAsset"],
+        "iconAsset": catalog["iconAsset"],
+        "icons": icon_files,
+        "assets": builder.assets,
+        "statistics": {
+            "sourceFiles": len(static_ids) + len(animated_ids),
+            "staticFiles": len(static_ids),
+            "animatedFiles": len(animated_ids),
+            "dailyPairs": len(catalog["daily"]),
+            "actions": len(action_ids),
+            "staticActions": len(static_action_ids),
+            "gifActions": len(gif_action_ids),
+            "movementBehaviors": len(catalog["movement"]),
+        },
     }
 
 
@@ -523,8 +409,7 @@ def write_generated_assets() -> dict[str, Any]:
     STAGING_ROOT.mkdir(parents=True)
     try:
         manifest = build_manifest(STAGING_ROOT)
-        manifest_path = STAGING_ROOT / "manifest.json"
-        manifest_path.write_text(
+        (STAGING_ROOT / "manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
@@ -538,40 +423,11 @@ def write_generated_assets() -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="准备糖猫桌宠第三版素材副本")
-    parser.add_argument(
-        "--check",
-        action="store_true",
-        help="生成素材后额外核对预期的素材池数量",
-    )
-    args = parser.parse_args()
-
     manifest = write_generated_assets()
     statistics_data = manifest["statistics"]
-    if args.check:
-        expected = {
-            "collectionFiles": 157,
-            "dailyFiles": 19,
-            "dailyPairs": 5,
-            "actions": 133,
-            "staticActions": 113,
-            "gifActions": 20,
-            "movementBehaviors": 3,
-        }
-        mismatches = {
-            key: (statistics_data.get(key), value)
-            for key, value in expected.items()
-            if statistics_data.get(key) != value
-        }
-        if mismatches:
-            details = "，".join(
-                f"{key}={actual}（预期 {expected_value}）"
-                for key, (actual, expected_value) in mismatches.items()
-            )
-            raise SystemExit(f"素材池数量检查失败：{details}")
-
     print(
         "素材准备完成："
+        f"{statistics_data['sourceFiles']} 份素材，"
         f"{statistics_data['dailyPairs']} 组日常，"
         f"{statistics_data['actions']} 个普通动作，"
         f"{statistics_data['movementBehaviors']} 个移动行为"
