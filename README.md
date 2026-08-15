@@ -1,6 +1,6 @@
 # 糖猫桌宠
 
-糖猫桌宠是一个运行在 Windows 上的 Electron 桌面宠物。它会待在桌面边缘，随机切换表情和动作，也会回应悬停、点击、拖拽与鼠标玩耍。程序没有语音、音效、任务提醒或养成系统，只负责安静地陪着你。
+糖猫桌宠是一个使用 Electron 开发的 Windows 桌面宠物。它会在桌面边缘随机待机、播放动作和移动，并响应悬停、点击、拖拽与鼠标玩耍。程序完全静音，不包含任务提醒、养成数值或其他工具功能。
 
 当前版本为 `v0.3.0`。
 
@@ -17,22 +17,41 @@
 
 具体的概率、速度、时长和交互优先级见[桌宠规则](./docs/桌宠规则.md)。
 
-## 环境要求
+## 源码与素材
+
+仓库公开应用源码、测试、构建脚本和语义化素材清单，不包含糖猫角色图片、GIF、图标、生成素材或正式发布包。
+
+`assets/catalog.json` 是代码与素材之间的协议。素材以语义 ID 引用，物理目录只区分 PNG 和 GIF，不按日常、动作或特殊行为重复存放。同一素材可以承担多个角色。
+
+为了让仓库在没有真实素材时仍可运行和测试，项目提供确定性的几何占位素材生成器。占位图只用于开发验证，不包含或模仿糖猫角色内容。
+
+## 快速开始
+
+环境要求：
 
 - Windows 10 或 Windows 11
 - Node.js 22.12.0 或更高版本
 - Python 3.10 或更高版本
 
-安装依赖：
+安装依赖并生成占位素材：
 
 ```powershell
 python -m pip install -r requirements.txt
 npm ci
+npm run test:demo
 ```
 
-## 准备素材
+随后可以启动桌宠：
 
-仓库不包含角色图片和 GIF。运行项目之前，需要按 [assets/catalog.json](./assets/catalog.json) 中的语义 ID 准备本地素材：
+```powershell
+npm start
+```
+
+`npm run test:demo` 只会创建或更新由该命令生成的 `assets/local/`。如果目录中已经存在自行准备的真实素材，命令会停止，不会覆盖它们。
+
+## 使用自己的素材
+
+按照 `assets/catalog.json` 中声明的 ID 准备文件：
 
 ```text
 assets/local/
@@ -40,40 +59,28 @@ assets/local/
 └─ animated/<asset-id>.gif
 ```
 
-素材用途不由目录或文件名推断。日常、普通动作、移动和特殊行为都在 `assets/catalog.json` 中声明，同一份素材可以承担多个角色。
-
-完整的命名和生成规则见[素材目录说明](./assets/README.md)。`assets/local/` 不进入版本控制；缺少素材时，生成、测试和启动会直接失败。
-
-## 运行
+然后运行：
 
 ```powershell
+npm run prepare:assets
+npm test
 npm start
 ```
 
-启动前会根据素材清单重建 `assets/generated/`，随后打开桌宠。项目使用严格单实例；如果糖猫已经在运行，新进程会直接退出。
+素材生成、缩放和角色映射规则见[素材目录说明](./assets/README.md)。
 
-常用操作：
-
-- 悬停：切换当前日常状态对应的表情
-- 单击：随机播放一个普通动作
-- 双击：随机播放一个 GIF 动作
-- 拖拽：移动糖猫；快速甩出会进入投掷
-- 右键：随机动作、移动、玩耍、暂停、调整大小、隐藏或退出
-- 托盘：管理环境感知、鼠标穿透、性格和显示状态
-
-## 开发
+## 开发与验证
 
 | 命令 | 用途 |
 |---|---|
-| `npm run check` | 检查源码和构建脚本 |
-| `npm test` | 重新生成素材并运行单元测试 |
+| `npm run check` | 检查 JavaScript 与 Python 源码语法 |
+| `npm test` | 使用 `assets/local/` 生成运行时素材并执行测试 |
+| `npm run test:demo` | 生成几何占位素材并执行完整测试 |
 | `npm run start:smoke` | 启动真实 Electron 窗口进行自动冒烟测试 |
 | `npm run catalog:assets` | 生成素材尺寸目录图 |
-| `npm run docs:dialogue` | 根据源码更新气泡文案文档 |
+| `npm run dist` | 构建 Windows x64 单文件便携版 |
 
-运行 `npm run start:smoke` 前，请先从托盘退出正在运行的糖猫。测试截图保存在 `build/smoke-test/`，素材目录图保存在 `build/asset-catalog/`；这些目录都不会提交到仓库。
-
-主要代码分工：
+主要模块：
 
 | 路径 | 内容 |
 |---|---|
@@ -85,22 +92,18 @@ npm start
 | `scripts/prepare_assets.py` | 生成运行时素材、GIF 帧和碰撞信息 |
 | `tests/` | 核心逻辑、文案、素材协议和资源格式测试 |
 
-开发约定见 [AGENTS.md](./AGENTS.md)，文档之间的权威顺序见[项目文档索引](./docs/README.md)。
+运行真实窗口测试前，请先从托盘退出正在运行的糖猫。测试截图、生成素材、构建目录和 EXE 都由 `.gitignore` 排除。
 
 ## 构建
 
-生成 Windows x64 单文件便携版：
+准备完整素材后运行：
 
 ```powershell
 npm run dist
 ```
 
-成品输出到 `release/糖猫桌宠-0.3.0.exe`，同时生成 SHA-256 校验文件。构建会检查源码与测试，整理运行时资源，并验证最终包的文件范围和 Electron 安全配置。
+成品输出到 `release/糖猫桌宠-0.3.0.exe`，同时生成 SHA-256 校验文件。项目没有配置商业代码签名证书，因此 Windows 可能显示“未知发布者”。
 
-`release/` 不进入版本控制。当前没有配置商业代码签名证书，因此 Windows 可能显示“未知发布者”。
+## 使用说明
 
-## 素材与许可
-
-角色图片、GIF 和生成素材不随仓库发布，也不因代码公开而获得授权。正式包只包含运行所需的资源副本；具体处理方式见[素材目录说明](./assets/README.md)。
-
-项目目前在 `package.json` 中标记为 `UNLICENSED`，尚未选择开源许可证。在许可证落地之前，仓库内容不能视为已经获得开源使用、修改或再分发授权。
+本仓库未附带开源许可证，`package.json` 标记为 `UNLICENSED`。公开源码仅供查看和参考，不表示已经授予使用、修改或再分发许可。糖猫角色素材及正式发布包不属于本仓库内容。
