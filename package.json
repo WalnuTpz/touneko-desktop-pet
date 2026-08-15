@@ -5,10 +5,6 @@
   "main": "src/main.js",
   "author": "Walnut",
   "license": "UNLICENSED",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/WalnuTpz/touneko-desktop-pet.git"
-  },
   "scripts": {
     "prepare:assets": "python scripts/prepare_assets.py --check",
     "prestart": "npm run prepare:assets",
