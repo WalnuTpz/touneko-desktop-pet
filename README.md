@@ -33,21 +33,28 @@
 - Node.js 22.12.0 或更高版本
 - Python 3.10 或更高版本
 
-安装依赖并生成占位素材：
+克隆仓库并进入项目目录：
+
+```powershell
+git clone https://github.com/WalnuTpz/touneko-desktop-pet.git
+cd touneko-desktop-pet
+```
+
+安装依赖：
 
 ```powershell
 python -m pip install -r requirements.txt
 npm ci
-npm run test:demo
 ```
 
-随后可以启动桌宠：
+生成占位素材并启动桌宠：
 
 ```powershell
+npm run demo:assets
 npm start
 ```
 
-`npm run test:demo` 只会创建或更新由该命令生成的 `assets/local/`。如果目录中已经存在自行准备的真实素材，命令会停止，不会覆盖它们。
+`npm run demo:assets` 只会创建或更新由该命令生成的 `assets/local/`。如果目录中已经存在自行准备的真实素材，命令会停止，不会覆盖它们。需要同时执行完整测试时，运行 `npm run test:demo`。
 
 ## 使用自己的素材
 
