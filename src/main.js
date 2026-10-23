@@ -96,7 +96,13 @@ let smokeReadyTimer = null;
 let environmentSampleTimer = null;
 let workBiasUntil = 0;
 const activitySamples = [];
-const fullscreenStability = new StableValueTracker("");
+const fullscreenStability = new Map();
+// The window stays hidden until Windows supplies its actual click interval.
+let doubleClickDelayMs = 280;
+let resolveInputSettings;
+const inputSettingsReady = process.platform === "win32"
+  ? new Promise((resolve) => { resolveInputSettings = resolve; })
+  : Promise.resolve();
 
 function generatedPath(...parts) {
   return path.join(__dirname, "..", "assets", "generated", ...parts);
@@ -697,49 +703,43 @@ function updateFullscreenVisibility() {
 
 function parseFullscreenLine(line) {
   if (!line.trim()) return;
-  try {
-    const fullscreenState = JSON.parse(line);
-    fullscreenSamples += 1;
-    if (fullscreenState.eligible === false) {
-      return;
-    }
-    const fullscreenWindows = Array.isArray(fullscreenState.fullscreenWindows)
-      ? fullscreenState.fullscreenWindows
-      : fullscreenState.fullscreen
-        ? [fullscreenState]
-        : [];
-    const candidateDisplayIds = new Set();
-    for (const windowState of fullscreenWindows) {
-      if (Number(windowState.processId) === process.pid) continue;
-      const coordinates = [
-        Number(windowState.left),
-        Number(windowState.top),
-        Number(windowState.right),
-        Number(windowState.bottom),
-      ];
-      if (!coordinates.every(Number.isFinite)) continue;
-      const center = {
-        x: Math.round((coordinates[0] + coordinates[2]) / 2),
-        y: Math.round((coordinates[1] + coordinates[3]) / 2),
-      };
-      candidateDisplayIds.add(
-        String(screen.getDisplayNearestPoint(center).id),
-      );
-    }
-    const candidateKey = [...candidateDisplayIds].sort().join(",");
-    const stable = fullscreenStability.sample(
-      candidateKey,
-      candidateKey === "" ? 2 : 3,
-    );
-    if (stable.changed) {
-      activeFullscreenDisplayIds = new Set(
-        stable.value ? String(stable.value).split(",") : [],
-      );
-      updateFullscreenVisibility();
-    }
-  } catch {
-    // 忽略监测进程退出时可能残留的不完整输出。
+  const fullscreenState = JSON.parse(line);
+  const delay = fullscreenState.doubleClickDelayMs;
+  if (!Number.isInteger(delay) || delay <= 0 || delay > 5000) {
+    throw new Error("全屏监测进程返回了无效的系统双击时间");
   }
+  if (delay !== doubleClickDelayMs) {
+    doubleClickDelayMs = delay;
+    sendCommand("set-double-click-delay", { value: delay });
+  }
+  resolveInputSettings?.();
+  fullscreenSamples += 1;
+  const candidateDisplayIds = new Set();
+  for (const windowState of fullscreenState.fullscreenWindows) {
+    if (windowState.processId === process.pid) continue;
+    // The Win32 helper emits physical pixels; Electron display lookup uses DIP.
+    const center = screen.screenToDipPoint({
+      x: Math.round((windowState.left + windowState.right) / 2),
+      y: Math.round((windowState.top + windowState.bottom) / 2),
+    });
+    candidateDisplayIds.add(String(screen.getDisplayNearestPoint(center).id));
+  }
+  const nextActive = new Set();
+  const displays = screen.getAllDisplays();
+  for (const display of displays) {
+    const id = String(display.id);
+    if (!fullscreenStability.has(id)) {
+      fullscreenStability.set(id, new StableValueTracker(false));
+    }
+    const fullscreen = candidateDisplayIds.has(id);
+    const stable = fullscreenStability.get(id).sample(fullscreen, fullscreen ? 3 : 2);
+    if (stable.value) nextActive.add(id);
+  }
+  for (const id of fullscreenStability.keys()) {
+    if (!displays.some((display) => String(display.id) === id)) fullscreenStability.delete(id);
+  }
+  activeFullscreenDisplayIds = nextActive;
+  updateFullscreenVisibility();
 }
 
 function fullscreenMonitorPath() {
@@ -812,7 +812,11 @@ function startFullscreenMonitor() {
     fullscreenOutput += chunk;
     const lines = fullscreenOutput.split(/\r?\n/);
     fullscreenOutput = lines.pop() || "";
-    lines.forEach(parseFullscreenLine);
+    try {
+      lines.forEach(parseFullscreenLine);
+    } catch (error) {
+      failApplicationStartup(error);
+    }
   });
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
@@ -823,7 +827,7 @@ function startFullscreenMonitor() {
   const handleMonitorStop = () => {
     if (fullscreenProcess !== child) return;
     fullscreenProcess = null;
-    fullscreenStability.reset("");
+    fullscreenStability.clear();
     activeFullscreenDisplayIds = new Set();
     if (quitting) return;
     updateFullscreenVisibility();
@@ -877,26 +881,30 @@ function moveBy(delta) {
 }
 
 function registerIpc() {
-  ipcMain.handle("pet:get-bootstrap", () => ({
-    manifest,
-    assetBaseUrl: protectedResources
-      ? `${RESOURCE_SCHEME}://${RESOURCE_HOST}/assets/`
-      : null,
-    smokeTest: app.commandLine.hasSwitch("smoke-test"),
-    runtime: {
-      paused: runtime.paused,
-      clickThrough: runtime.clickThrough,
-      scale: runtime.scale,
-      playing: runtime.playing,
-      personality: runtime.personality,
-      environmentAwareness: runtime.environmentAwareness,
-    },
-    environment: environmentSnapshot(),
-    window: {
-      width: WINDOW_WIDTH,
-      height: WINDOW_HEIGHT,
-    },
-  }));
+  ipcMain.handle("pet:get-bootstrap", async () => {
+    await inputSettingsReady;
+    return {
+      doubleClickDelayMs,
+      manifest,
+      assetBaseUrl: protectedResources
+        ? `${RESOURCE_SCHEME}://${RESOURCE_HOST}/assets/`
+        : null,
+      smokeTest: app.commandLine.hasSwitch("smoke-test"),
+      runtime: {
+        paused: runtime.paused,
+        clickThrough: runtime.clickThrough,
+        scale: runtime.scale,
+        playing: runtime.playing,
+        personality: runtime.personality,
+        environmentAwareness: runtime.environmentAwareness,
+      },
+      environment: environmentSnapshot(),
+      window: {
+        width: WINDOW_WIDTH,
+        height: WINDOW_HEIGHT,
+      },
+    };
+  });
 
   ipcMain.on("pet:renderer-ready", () => {
     clearTimeout(smokeReadyTimer);
@@ -1467,7 +1475,7 @@ async function runSmokeTest() {
     `window.__TANGMAO_SMOKE__.queueTestSingleClick()`,
     true,
   );
-  await delay(350);
+  await delay(doubleClickDelayMs + 70);
   const interruptedGifState = await rendererSmokeState();
   if (
     !["action-static", "action-gif"].includes(interruptedGifState.mode) ||
