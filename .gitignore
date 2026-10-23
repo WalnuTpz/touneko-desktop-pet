@@ -20,3 +20,7 @@ assets/generated-staging/
 
 # Locally assembled Codex pet packages and QA media
 output/codex-pet/
+
+# Local agent instructions
+AGENTS.md
+agents.md

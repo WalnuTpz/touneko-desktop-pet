@@ -26,7 +26,7 @@ const DEVELOPMENT_GENERATED_ROOT = new URL(
   "../assets/generated/",
   window.location.href,
 );
-const DOUBLE_CLICK_DELAY_MS = 280;
+let doubleClickDelayMs;
 const DRAG_THRESHOLD = 5;
 const BASELINE_MARGIN = 18;
 const POINTER_POLL_INTERVAL_MS = 80;
@@ -104,11 +104,12 @@ function cancelDelayedSingleClick() {
 }
 
 function scheduleSingleClick() {
+  if (!canHandleClick()) return;
   cancelDelayedSingleClick();
   clickTimer = setTimeout(() => {
     clickTimer = null;
     handleClickIntent("single");
-  }, DOUBLE_CLICK_DELAY_MS);
+  }, doubleClickDelayMs);
 }
 
 const hitCanvas = document.createElement("canvas");
@@ -863,8 +864,8 @@ function pickAction(trigger) {
 function pickDaily() {
   const preference = environmentPreference();
   return pickWeighted(manifest.daily, (entry) => {
-    if (preference === "work" && entry.id === "daily-3") return 3;
-    if (preference === "sleep" && entry.id === "daily-7") return 3;
+    if (preference === "work" && entry.id === "working") return 3;
+    if (preference === "sleep" && entry.id === "sleeping") return 3;
     return 1;
   });
 }
@@ -987,19 +988,16 @@ function executeClickIntent(kind) {
   startAction(assetId, kind);
 }
 
+function canHandleClick() {
+  return (
+    !state.clickThrough &&
+    !state.fullscreenPaused &&
+    ["daily", "hover", "action-static", "action-gif", "movement"].includes(state.mode)
+  );
+}
+
 function handleClickIntent(kind) {
-  if (
-    state.mode === "hidden" ||
-    state.mode === "playing" ||
-    state.mode.startsWith("play-") ||
-    state.mode === "throwing" ||
-    state.mode === "landing" ||
-    state.mode === "dragging" ||
-    state.fullscreenPaused
-  ) {
-    return;
-  }
-  executeClickIntent(kind);
+  if (canHandleClick()) executeClickIntent(kind);
 }
 
 function movementEntries() {
@@ -1669,9 +1667,15 @@ function handleCommand(payload) {
       break;
     case "set-click-through":
       state.clickThrough = Boolean(payload.value);
-      if (state.clickThrough) cancelPointerInteraction();
+      if (state.clickThrough) {
+        cancelDelayedSingleClick();
+        cancelPointerInteraction();
+      }
       if (state.clickThrough && state.mode === "hover") leaveHover();
       reportPointerRegion(false);
+      break;
+    case "set-double-click-delay":
+      doubleClickDelayMs = payload.value;
       break;
     case "set-scale":
       setUserScale(payload.value);
@@ -1735,7 +1739,7 @@ function installSmokeApi(enabled) {
 }
 
 function updatePointerPosition(point) {
-  if (!state || state.mode === "hidden") {
+  if (!state || state.mode === "hidden" || state.fullscreenPaused) {
     reportPointerRegion(false);
     return;
   }
@@ -1982,13 +1986,18 @@ stage.addEventListener("lostpointercapture", (event) => {
   if (pointerState?.id === event.pointerId) cancelPointerInteraction();
 });
 
-stage.addEventListener("click", () => {
-  if (Date.now() < suppressClickUntil) return;
+stage.addEventListener("mousedown", (event) => {
+  // Windows recognizes the second press before the eventual dblclick on release.
+  if (event.button === 0 && event.detail === 2) cancelDelayedSingleClick();
+});
+
+stage.addEventListener("click", (event) => {
+  if (Date.now() < suppressClickUntil || !hitTest(event.clientX, event.clientY)) return;
   scheduleSingleClick();
 });
 
-stage.addEventListener("dblclick", () => {
-  if (Date.now() < suppressClickUntil) return;
+stage.addEventListener("dblclick", (event) => {
+  if (Date.now() < suppressClickUntil || !hitTest(event.clientX, event.clientY)) return;
   cancelDelayedSingleClick();
   handleClickIntent("double");
 });
@@ -2009,6 +2018,7 @@ async function initialize() {
   const bootstrap = await window.desktopPet.getBootstrap();
   manifest = bootstrap.manifest;
   assets = manifest.assets;
+  doubleClickDelayMs = bootstrap.doubleClickDelayMs;
   assetBaseUrl =
     typeof bootstrap.assetBaseUrl === "string" && bootstrap.assetBaseUrl
       ? bootstrap.assetBaseUrl

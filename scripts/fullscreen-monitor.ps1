@@ -3,6 +3,8 @@ param(
     [int]$ParentProcessId
 )
 
+$ErrorActionPreference = "Stop"
+
 $signature = @'
 using System;
 using System.Collections.Generic;
@@ -37,6 +39,12 @@ public static class FullscreenProbe
     }
 
     public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    public static extern uint GetDoubleClickTime();
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
@@ -93,6 +101,11 @@ public static class FullscreenProbe
 '@
 
 Add-Type -TypeDefinition $signature
+
+# Keep all Win32 rectangles in physical pixels, including mixed-DPI monitors.
+if ([FullscreenProbe]::SetThreadDpiAwarenessContext([IntPtr](-3)) -eq [IntPtr]::Zero) {
+    throw "Cannot enable per-monitor DPI awareness for fullscreen detection"
+}
 
 $ignoredClasses = @(
     "Progman",
@@ -232,6 +245,7 @@ while (Get-Process -Id $ParentProcessId -ErrorAction SilentlyContinue) {
     }
 
     $result = [ordered]@{
+        doubleClickDelayMs = [FullscreenProbe]::GetDoubleClickTime()
         fullscreen = $fullscreenWindows.Count -gt 0
         fullscreenWindows = @($fullscreenWindows)
     }

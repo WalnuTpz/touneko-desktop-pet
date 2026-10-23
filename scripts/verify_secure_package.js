@@ -44,6 +44,7 @@ function verifyAsarInventory() {
     .map((entry) => entry.replace(/\\/g, "/").replace(/^\/+/, ""))
     .sort();
   const expected = [
+    "LICENSE",
     "assets",
     "assets/runtime.tpack",
     "package.json",
@@ -72,7 +73,7 @@ function verifyAsarInventory() {
   const packagedMetadata = JSON.parse(
     asar.extractFile(asarPath, "package.json").toString("utf8"),
   );
-  for (const field of ["name", "version", "main"]) {
+  for (const field of ["name", "version", "main", "license"]) {
     assert(
       packagedMetadata[field] === packageJson[field],
       `包内 package.json 的 ${field} 与项目不一致`,
